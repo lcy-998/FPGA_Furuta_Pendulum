@@ -1,0 +1,21 @@
+<?xml version="1" encoding="UTF-8"?>
+<!DOCTYPE gowin-fpga-project>
+<Project>
+    <Template>FPGA</Template>
+    <Version>5</Version>
+    <Device name="GW2A-18C" pn="GW2A-LV18PG256C8/I7">gw2a18c-011</Device>
+    <FileList>
+        <File path="src/adc_bridge.v" type="file.verilog" enable="1"/>
+        <File path="src/angle_sensor_reader.v" type="file.verilog" enable="1"/>
+        <File path="src/ctrl_fsm.v" type="file.verilog" enable="1"/>
+        <File path="src/encoder_quad_reader.v" type="file.verilog" enable="1"/>
+        <File path="src/furuta_lqr_ctrl.v" type="file.verilog" enable="1"/>
+        <File path="src/j280_top.v" type="file.verilog" enable="1"/>
+        <File path="src/pwm_driver.v" type="file.verilog" enable="1"/>
+        <File path="src/swing_up_ctrl.v" type="file.verilog" enable="1"/>
+        <File path="src/traj_gen.v" type="file.verilog" enable="1"/>
+        <File path="src/my_fpga.cst" type="file.cst" enable="1"/>
+        <File path="src/my_fpga.sdc" type="file.sdc" enable="1"/>
+        <File path="src/my_fpga.rao" type="file.gao" enable="1"/>
+    </FileList>
+</Project>

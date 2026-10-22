@@ -1,0 +1,35 @@
+//Copyright (C)2014-2025 Gowin Semiconductor Corporation.
+//All rights reserved. 
+//File Title: Physical Constraints file
+//Tool Version: V1.9.11.03 Education
+//Part Number: GW2A-LV18PG256C8/I7
+//Device: GW2A-18
+//Device Version: C
+//Created Time: Thu 10 15 22:42:33 2026
+
+IO_LOC "led_motor_run" R7;
+IO_PORT "led_motor_run" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC "led_calib_ok" R9;
+IO_PORT "led_calib_ok" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC "led_balance" N6;
+IO_PORT "led_balance" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC "motor_in2" E16;
+IO_PORT "motor_in2" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC "motor_in1" J13;
+IO_PORT "motor_in1" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC "motor_pwm" C16;
+IO_PORT "motor_pwm" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC "adc_rx" K11;
+IO_PORT "adc_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;
+IO_LOC "enc_b" H11;
+IO_PORT "enc_b" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;
+IO_LOC "enc_a" F16;
+IO_PORT "enc_a" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;
+IO_LOC "key_pos_clear" G14;
+IO_PORT "key_pos_clear" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;
+IO_LOC "key_zero_calib" H15;
+IO_PORT "key_zero_calib" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;
+IO_LOC "rst_n" D11;
+IO_PORT "rst_n" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;
+IO_LOC "clk_50m" T7;
+IO_PORT "clk_50m" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;

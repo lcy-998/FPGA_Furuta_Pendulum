@@ -1,0 +1,7 @@
+# Gowin generated implementation and temporary files
+impl/
+parser.out
+parsetab.py
+
+# Local Gowin Designer user state
+*.gprj.user
