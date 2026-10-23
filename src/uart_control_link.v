@@ -11,12 +11,15 @@ module uart_control_link #(
     input wire signed [31:0] alpha_q16, dalpha_q16,
     input wire signed [31:0] theta_ref_q16, dtheta_ref_q16,
     input wire signed [31:0] alpha_ref_q16, dalpha_ref_q16,
+    input wire signed [15:0] pwm_duty,
+    output reg signed [15:0] pwm_set_duty,
+    output reg pwm_set_valid,
     output wire signed [17:0] gain_k1, gain_k2, gain_k3, gain_k4, gain_k5,
     output reg [7:0] last_command_seq,
     output reg [7:0] last_command_status
 );
     localparam integer BIT_CLKS = CLK_HZ / BAUD;
-    localparam [7:0] TYPE_TELEMETRY = 8'h01, TYPE_SET_GAINS = 8'h10, TYPE_ACK = 8'h81;
+    localparam [7:0] TYPE_TELEMETRY = 8'h01, TYPE_SET_GAINS = 8'h10, TYPE_SET_PWM = 8'h11, TYPE_ACK = 8'h81;
 
     function [15:0] crc_byte;
         input [15:0] crc_in; input [7:0] data;
@@ -76,11 +79,12 @@ module uart_control_link #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             p_state<=P_SYNC; p_type<=0; p_seq<=0; p_len<=0; p_index<=0;
-            p_crc<=16'hffff; p_crc_rx<=0; pending_valid<=0; pending_ok<=0; pending_seq<=0;
+            p_crc<=16'hffff; p_crc_rx<=0; pending_valid<=0; pending_ok<=0; pending_seq<=0; pwm_set_duty<=0; pwm_set_valid<=0;
             for (i=0;i<20;i=i+1) p_data[i]<=0;
             for (i=0;i<5;i=i+1) pending_word[i]<=0;
         end else begin
             if (sample_done && pending_valid) pending_valid<=1'b0;
+            pwm_set_valid <= 1'b0;
             if (rx_valid) begin
                 case (p_state)
                     P_SYNC: if (rx_byte==8'ha5) begin p_state<=P_TYPE; p_crc<=16'hffff; end
@@ -88,7 +92,7 @@ module uart_control_link #(
                     P_SEQ: begin p_seq<=rx_byte; p_crc<=crc_byte(p_crc,rx_byte); p_state<=P_LEN; end
                     P_LEN: begin
                         p_len<=rx_byte; p_crc<=crc_byte(p_crc,rx_byte); p_index<=0;
-                        if (p_type==TYPE_SET_GAINS && rx_byte==20) p_state<=P_PAYLOAD;
+                        if ((p_type==TYPE_SET_GAINS && rx_byte==20) || (p_type==TYPE_SET_PWM && rx_byte==2)) p_state<=P_PAYLOAD;
                         else begin
                             p_state<=P_SYNC;
                             if (p_type==TYPE_SET_GAINS) begin
@@ -103,7 +107,9 @@ module uart_control_link #(
                     P_CRC0: begin p_crc_rx[7:0]<=rx_byte; p_state<=P_CRC1; end
                     P_CRC1: begin
                         p_state<=P_SYNC;
-                        if ({rx_byte,p_crc_rx[7:0]}==p_crc) begin
+                        if (p_type==TYPE_SET_PWM && p_len==2 && {rx_byte,p_crc_rx[7:0]}==p_crc) begin
+                            pwm_set_duty <= {p_data[1],p_data[0]}; pwm_set_valid <= 1'b1;
+                        end else if ({rx_byte,p_crc_rx[7:0]}==p_crc) begin
                             for (i=0;i<5;i=i+1)
                                 pending_word[i] <= {p_data[i*4+3],p_data[i*4+2],p_data[i*4+1],p_data[i*4]};
                             pending_seq<=p_seq;
@@ -155,8 +161,8 @@ module uart_control_link #(
         end
     end
 
-    // TX packet builder/serializer. Telemetry payload is eight signed Q16.16 words.
-    reg [7:0] payload [0:31];
+    // TX packet builder/serializer. Telemetry: eight Q16.16 words plus signed PWM duty.
+    reg [7:0] payload [0:35];
     reg [7:0] tx_type, tx_seq, tx_len, tx_idx;
     reg tx_packet_pending;
     wire ack_take = ack_pending && !tx_packet_pending && (tx_idx==0);
@@ -185,14 +191,14 @@ module uart_control_link #(
         if (!rst_n) begin
             tx_type<=0; tx_seq<=0; tx_len<=0; tx_idx<=0; tx_packet_pending<=0;
             telemetry_div<=0; seq_counter<=0; tx_crc<=16'hffff;
-            for (j=0;j<32;j=j+1) payload[j]<=0;
+            for (j=0;j<36;j=j+1) payload[j]<=0;
         end else begin
             if (sample_done) begin
                 if (telemetry_div==9) begin
                     telemetry_div<=0;
                     if (!tx_packet_pending && !ack_pending && tx_idx==0) begin
                         tx_type<=TYPE_TELEMETRY; tx_seq<=seq_counter; seq_counter<=seq_counter+1'b1;
-                        tx_len<=32; tx_idx<=0; tx_packet_pending<=1;
+                        tx_len<=36; tx_idx<=0; tx_packet_pending<=1;
                         payload[0]<=theta_q16[7:0]; payload[1]<=theta_q16[15:8]; payload[2]<=theta_q16[23:16]; payload[3]<=theta_q16[31:24];
                         payload[4]<=dtheta_q16[7:0]; payload[5]<=dtheta_q16[15:8]; payload[6]<=dtheta_q16[23:16]; payload[7]<=dtheta_q16[31:24];
                         payload[8]<=alpha_q16[7:0]; payload[9]<=alpha_q16[15:8]; payload[10]<=alpha_q16[23:16]; payload[11]<=alpha_q16[31:24];
@@ -201,6 +207,7 @@ module uart_control_link #(
                         payload[20]<=dtheta_ref_q16[7:0]; payload[21]<=dtheta_ref_q16[15:8]; payload[22]<=dtheta_ref_q16[23:16]; payload[23]<=dtheta_ref_q16[31:24];
                         payload[24]<=alpha_ref_q16[7:0]; payload[25]<=alpha_ref_q16[15:8]; payload[26]<=alpha_ref_q16[23:16]; payload[27]<=alpha_ref_q16[31:24];
                         payload[28]<=dalpha_ref_q16[7:0]; payload[29]<=dalpha_ref_q16[15:8]; payload[30]<=dalpha_ref_q16[23:16]; payload[31]<=dalpha_ref_q16[31:24];
+                        payload[32]<=pwm_duty[7:0]; payload[33]<=pwm_duty[15:8]; payload[34]<={8{pwm_duty[15]}}; payload[35]<={8{pwm_duty[15]}};
                     end
                 end else telemetry_div<=telemetry_div+1'b1;
             end

@@ -65,11 +65,11 @@ module j280_hw_top #(
     wire blink_10hz = blink_cnt[21]; // ~12 Hz
 
     // -------------------------------------------------------------------------
-    // 2. KEY1: 固定零位，无需现场标定；每次按下切换运行/停机
+    // 2. 死区测试：KEY1 每次有效按下将手动 PWM 加 1（最大 1000）。
     // -------------------------------------------------------------------------
     reg [23:0] calib_debounce_cnt;
     reg        calib_pressed;
-    reg        start_requested;
+    reg        pwm_step_pulse;
     reg        adc_has_sampled;
 
     wire        sample_done;
@@ -89,16 +89,14 @@ module j280_hw_top #(
         if (!rst_n) begin
             calib_debounce_cnt <= 24'd0;
             calib_pressed      <= 1'b0;
-            start_requested    <= 1'b0;
+            pwm_step_pulse     <= 1'b0;
         end else begin
-            // ADC 失联后需要重新按 KEY1 启动；固定零位无需重新标定。
-            if (adc_stale)
-                start_requested <= 1'b0;
+            pwm_step_pulse <= 1'b0;
             if (key_zero_calib == 1'b0) begin
                 if (calib_debounce_cnt < CALIB_DEBOUNCE_CYCLES) begin
                     calib_debounce_cnt <= calib_debounce_cnt + 1'b1;
-                end else if (!calib_pressed && adc_has_sampled && !adc_stale) begin
-                    start_requested <= ~start_requested;
+                end else if (!calib_pressed) begin
+                    pwm_step_pulse   <= 1'b1;
                     calib_pressed   <= 1'b1;
                 end
             end else begin
@@ -225,6 +223,9 @@ module j280_hw_top #(
     wire signed [31:0] dalpha_err_q16 = dalpha_rad_s_q16 - dalpha_ref_q16;
 
     wire signed [17:0] gain_k1, gain_k2, gain_k3, gain_k4, gain_k5;
+    wire signed [15:0] uart_pwm_duty;
+    wire               uart_pwm_set_valid;
+    reg signed [15:0]  manual_pwm_duty;
     wire [7:0] pc_gain_seq, pc_gain_status;
     uart_control_link #(.CLK_HZ(CLK_FREQ_HZ), .BAUD(115200)) u_pc_link (
         .clk(clk_50m), .rst_n(rst_n), .rx(uart_rx), .tx(uart_tx), .sample_done(sample_done),
@@ -232,9 +233,20 @@ module j280_hw_top #(
         .alpha_q16(alpha_rad_q16), .dalpha_q16(dalpha_rad_s_q16),
         .theta_ref_q16(32'sd0), .dtheta_ref_q16(32'sd0),
         .alpha_ref_q16(alpha_ref_q16), .dalpha_ref_q16(dalpha_ref_q16),
+        .pwm_duty(manual_pwm_duty), .pwm_set_duty(uart_pwm_duty), .pwm_set_valid(uart_pwm_set_valid),
         .gain_k1(gain_k1), .gain_k2(gain_k2), .gain_k3(gain_k3), .gain_k4(gain_k4), .gain_k5(gain_k5),
         .last_command_seq(pc_gain_seq), .last_command_status(pc_gain_status)
     );
+
+    always @(posedge clk_50m or negedge rst_n) begin
+        if (!rst_n) manual_pwm_duty <= 16'sd0;
+        else if (uart_pwm_set_valid) begin
+            if (uart_pwm_duty < 0) manual_pwm_duty <= 16'sd0;
+            else if (uart_pwm_duty > 16'sd1000) manual_pwm_duty <= 16'sd1000;
+            else manual_pwm_duty <= uart_pwm_duty;
+        end else if (pwm_step_pulse && manual_pwm_duty < 16'sd1000)
+            manual_pwm_duty <= manual_pwm_duty + 1'b1;
+    end
 
     // -------------------------------------------------------------------------
     // 8. 声明内部连线并例化子模块
@@ -362,7 +374,7 @@ module j280_hw_top #(
         .clk                 (clk_50m),
         .rst_n               (rst_n),
         .calc_en             (sample_done),
-        .motor_en_sw         (sw_motor_en && start_requested && !adc_stale),
+        .motor_en_sw         (1'b0), // 死区测试分支禁用闭环状态机的电机输出
         .calib_done          (1'b1),
         .soft_limit_err      (soft_limit_err),
         .theta_err_q16       (theta_err_q16),
@@ -392,9 +404,9 @@ module j280_hw_top #(
     ) u_motor_driver (
         .clk        (clk_50m),
         .rst_n      (rst_n),
-        .motor_en   (fsm_motor_active && !adc_stale),
-        .brake_mode (sw_brake_mode && !adc_stale),
-        .pwm_duty   (adc_stale ? 16'sd0 : final_pwm_duty),
+        .motor_en   (manual_pwm_duty != 16'sd0),
+        .brake_mode (1'b0),
+        .pwm_duty   (manual_pwm_duty),
         .pwm_out    (motor_pwm),
         .dir_out    (motor_dir),
         .in1_out    (motor_in1),
@@ -413,8 +425,7 @@ module j280_hw_top #(
     assign led_calib_ok  = 1'b0;
 
     // led_motor_run: 保护自锁态警报快闪(10Hz)，正常工作有动力输出常亮(0)，其余熄灭(1)
-    assign led_motor_run = (fsm_state == 2'd3) ? blink_10hz :
-                           (fsm_motor_active && (final_pwm_duty != 16'sd0)) ? 1'b0 : 1'b1;
+    assign led_motor_run = (manual_pwm_duty != 16'sd0) ? 1'b0 : 1'b1;
 
     wire unused_adc_framing_err = adc_framing_err;
 

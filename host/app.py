@@ -12,7 +12,7 @@ import serial
 from serial.tools import list_ports
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from protocol import FIELDS, GAIN_DEFAULTS, Parser, TYPE_ACK, TYPE_TELEMETRY, gain_command, telemetry_values
+from protocol import FIELDS, GAIN_DEFAULTS, Parser, TYPE_ACK, TYPE_TELEMETRY, gain_command, pwm_command, telemetry_values
 
 
 class SerialWorker(QtCore.QThread):
@@ -170,6 +170,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.send_gains.clicked.connect(self.send_gain_values)
         self.send_gains.setEnabled(False)
 
+        pwm_box = QtWidgets.QGroupBox("死区测试 PWM")
+        pwm_layout = QtWidgets.QHBoxLayout(pwm_box)
+        self.pwm_input = QtWidgets.QSpinBox(); self.pwm_input.setRange(0, 1000); self.pwm_input.setSingleStep(1)
+        self.send_pwm = QtWidgets.QPushButton("设置 PWM")
+        self.pwm_value = QtWidgets.QLabel("当前：0")
+        pwm_layout.addWidget(QtWidgets.QLabel("占空比")); pwm_layout.addWidget(self.pwm_input)
+        pwm_layout.addWidget(self.send_pwm); pwm_layout.addWidget(self.pwm_value); pwm_layout.addStretch()
+        right.addWidget(pwm_box)
+        self.send_pwm.clicked.connect(self.send_pwm_value)
+        self.send_pwm.setEnabled(False)
+
     def refresh_ports(self) -> None:
         current = self.port_box.currentData()
         self.port_box.clear()
@@ -185,6 +196,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.worker.stop(); self.worker = None
             self.connect_button.setText("连接")
             self.send_gains.setEnabled(False)
+            self.send_pwm.setEnabled(False)
             self.pending_gain_seq = None
             return
         port = self.port_box.currentData()
@@ -196,6 +208,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.start()
         self.connect_button.setText("断开")
         self.send_gains.setEnabled(True)
+        self.send_pwm.setEnabled(True)
 
     @QtCore.Slot(int, int, bytes)
     def on_packet(self, kind: int, sequence: int, payload: bytes) -> None:
@@ -214,6 +227,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.history[key].append((now, values[key]))
             self.latest_values = values
             self.latest_time = now
+            self.pwm_value.setText(f"当前：{int(values['pwm_duty'])}")
         elif kind == TYPE_ACK and len(payload) == 1:
             if self.pending_gain_seq is None or sequence != self.pending_gain_seq:
                 return
@@ -245,6 +259,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"摆杆速度 {values['dtheta']:+.3f} / 目标 {values['dtheta_ref']:+.3f} rad/s\n"
             f"转臂 α {values['alpha']:+.3f} / 目标 {values['alpha_ref']:+.3f} rad\n"
             f"转臂速度 {values['dalpha']:+.3f} / 目标 {values['dalpha_ref']:+.3f} rad/s"
+            f"\n手动 PWM {int(values['pwm_duty'])} / 1000"
         )
 
     def send_gain_values(self) -> None:
@@ -258,6 +273,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.send(packet)
         self.send_gains.setEnabled(False)
         self.gain_result.setText(f"已发送序号 {self.sequence}，等待 FPGA 应答…")
+        self.sequence = (self.sequence + 1) & 0xFF
+
+    def send_pwm_value(self) -> None:
+        if not self.worker or not self.worker.isRunning():
+            self.status.setText("请先连接串口"); return
+        self.worker.send(pwm_command(self.sequence, self.pwm_input.value()))
         self.sequence = (self.sequence + 1) & 0xFF
 
     def toggle_pause(self) -> None:

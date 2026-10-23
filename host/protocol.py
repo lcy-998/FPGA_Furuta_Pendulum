@@ -7,8 +7,9 @@ from dataclasses import dataclass
 SYNC = 0xA5
 TYPE_TELEMETRY = 0x01
 TYPE_SET_GAINS = 0x10
+TYPE_SET_PWM = 0x11
 TYPE_ACK = 0x81
-FIELDS = ("theta", "dtheta", "alpha", "dalpha", "theta_ref", "dtheta_ref", "alpha_ref", "dalpha_ref")
+FIELDS = ("theta", "dtheta", "alpha", "dalpha", "theta_ref", "dtheta_ref", "alpha_ref", "dalpha_ref", "pwm_duty")
 GAIN_DEFAULTS = (-40059 / 1024, -696 / 1024, -9062 / 1024, -3994 / 1024, 0.0)
 
 
@@ -34,6 +35,10 @@ def gain_command(sequence: int, gains: list[float]) -> bytes:
     if any(value < -(1 << 17) or value >= (1 << 17) for value in raw):
         raise ValueError("增益必须在有符号 18 位 Q10 范围内（约 -128 到 127.999）")
     return frame(TYPE_SET_GAINS, sequence, struct.pack("<5i", *raw))
+
+def pwm_command(sequence: int, pwm: int) -> bytes:
+    if not 0 <= pwm <= 1000: raise ValueError("PWM 必须在 0 到 1000")
+    return frame(TYPE_SET_PWM, sequence, struct.pack("<h", pwm))
 
 
 @dataclass
@@ -78,6 +83,8 @@ class Parser:
 
 
 def telemetry_values(payload: bytes) -> dict[str, float]:
-    if len(payload) != 32:
+    if len(payload) != 36:
         raise ValueError(f"遥测长度错误：{len(payload)}")
-    return {name: raw / 65536.0 for name, raw in zip(FIELDS, struct.unpack("<8i", payload))}
+    values = {name: raw / 65536.0 for name, raw in zip(FIELDS[:8], struct.unpack("<8i", payload[:32]))}
+    values["pwm_duty"] = float(struct.unpack("<i", payload[32:])[0])
+    return values
