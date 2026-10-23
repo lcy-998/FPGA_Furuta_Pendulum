@@ -9,16 +9,23 @@ FIELDS = ["time_s", "theta", "dtheta", "alpha", "dalpha", "pwm_applied", "pwm_ex
 
 def fit(csv_path: Path, out: Path, sample_period: float | None):
     df = pd.read_csv(csv_path)
+    # Backward compatibility: old exports lacked PRBS and/or a usable time axis.
+    if "pwm_applied" not in df and "pwm_duty" in df:
+        df = df.rename(columns={"pwm_duty": "pwm_applied"})
+    if "pwm_exc" not in df:
+        df["pwm_exc"] = 0.0
+    if "time_s" not in df:
+        df["time_s"] = np.arange(len(df)) * (sample_period or 0.01)
     missing = set(FIELDS) - set(df.columns)
     if missing: raise ValueError(f"CSV 缺少列: {sorted(missing)}")
     df = df[FIELDS].dropna().sort_values("time_s")
     dt = np.diff(df.time_s.to_numpy())
     median_dt = float(np.median(dt))
     if not 0.005 <= median_dt <= 0.02:
-        if sample_period is None:
-            raise ValueError(f"采样周期异常: {median_dt:.6f}s；旧 CSV 请加 --sample-period 0.01")
-        df["time_s"] = np.arange(len(df)) * sample_period
-        dt = np.diff(df.time_s.to_numpy()); median_dt = sample_period
+        median_dt = sample_period or 0.01
+        print(f"警告：旧 CSV 的时间戳间隔为 {float(np.median(dt)):.6f}s，按 {median_dt:.3f}s 重建时间轴")
+        df["time_s"] = np.arange(len(df)) * median_dt
+        dt = np.diff(df.time_s.to_numpy())
     good = np.r_[True, np.isclose(dt, median_dt, rtol=0.2)]
     df = df.loc[good]
     df = df[(df.theta.abs() < 0.2) & (df.pwm_applied.abs() < 950)]
