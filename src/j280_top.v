@@ -228,13 +228,16 @@ module j280_hw_top #(
     wire [7:0] pc_gain_seq, pc_gain_status;
     wire signed [15:0] final_pwm_duty;
     wire [15:0] pwm_duty_abs = (final_pwm_duty < 16'sd0) ? -final_pwm_duty : final_pwm_duty;
+    wire ident_enable;
+    wire signed [15:0] prbs_exc;
+    wire signed [15:0] pwm_command;
     uart_control_link #(.CLK_HZ(CLK_FREQ_HZ), .BAUD(115200)) u_pc_link (
         .clk(clk_50m), .rst_n(rst_n), .rx(uart_rx), .tx(uart_tx), .sample_done(sample_done),
         .theta_q16(theta_err_q16), .dtheta_q16(dtheta_q16),
         .alpha_q16(alpha_rad_q16), .dalpha_q16(dalpha_rad_s_q16),
         .theta_ref_q16(32'sd0), .dtheta_ref_q16(32'sd0),
         .alpha_ref_q16(alpha_ref_q16), .dalpha_ref_q16(dalpha_ref_q16),
-        .pwm_duty(pwm_duty_abs),
+        .pwm_duty(pwm_command), .pwm_exc(prbs_exc), .ident_enable(ident_enable),
         .gain_k1(gain_k1), .gain_k2(gain_k2), .gain_k3(gain_k3), .gain_k4(gain_k4), .gain_k5(gain_k5),
         .last_command_seq(pc_gain_seq), .last_command_status(pc_gain_status)
     );
@@ -383,6 +386,24 @@ module j280_hw_top #(
         .motor_active        (fsm_motor_active)
     );
 
+    // 直立点辨识：平衡态且 |theta|<0.2rad 时叠加 ±20 PWM PRBS，20Hz 更新。
+    reg [15:0] prbs_lfsr;
+    reg [5:0] prbs_div;
+    wire prbs_active = ident_enable && (fsm_state == 2'd2) &&
+                       (theta_err_q16 > -32'sd13107) && (theta_err_q16 < 32'sd13107) && !adc_stale;
+    always @(posedge clk_50m or negedge rst_n) begin
+        if (!rst_n) begin prbs_lfsr<=16'h1; prbs_div<=0; end
+        else if (!prbs_active) begin prbs_lfsr<=16'h1; prbs_div<=0; end
+        else if (sample_done) begin
+            if (prbs_div == 6'd49) begin prbs_div<=0; prbs_lfsr<={prbs_lfsr[14:0],prbs_lfsr[15]^prbs_lfsr[13]^prbs_lfsr[12]^prbs_lfsr[10]}; end
+            else prbs_div<=prbs_div+1'b1;
+        end
+    end
+    assign prbs_exc = prbs_active ? (prbs_lfsr[0] ? 16'sd20 : -16'sd20) : 16'sd0;
+    wire signed [16:0] pwm_sum = final_pwm_duty + prbs_exc;
+    assign pwm_command = (pwm_sum > 17'sd1000) ? 16'sd1000 :
+                         ((pwm_sum < -17'sd1000) ? -16'sd1000 : pwm_sum[15:0]);
+
     // -------------------------------------------------------------------------
     // 13. 例化: 电机 PWM 驱动发生器与 H 桥接口模块 (D1: 能耗制动 STBY 常保)
     // -------------------------------------------------------------------------
@@ -396,7 +417,7 @@ module j280_hw_top #(
         .rst_n      (rst_n),
         .motor_en   (fsm_motor_active && !adc_stale),
         .brake_mode (sw_brake_mode && !adc_stale),
-        .pwm_duty   (adc_stale ? 16'sd0 : final_pwm_duty),
+        .pwm_duty   (adc_stale ? 16'sd0 : pwm_command),
         .pwm_out    (motor_pwm),
         .dir_out    (motor_dir),
         .in1_out    (motor_in1),

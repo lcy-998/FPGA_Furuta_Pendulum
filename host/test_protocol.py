@@ -12,7 +12,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(crc16(b"123456789"), 0x29B1)
 
     def test_fragmented_telemetry_and_signed_q16(self):
-        packet = frame(TYPE_TELEMETRY, 19, struct.pack("<9i", 65536, -131072, 3, -4, 5, -6, 7, -8, 321))
+        packet = frame(TYPE_TELEMETRY, 19, struct.pack("<11i", 65536, -131072, 3, -4, 5, -6, 7, -8, 321, 20, 1))
         parser = Parser()
         self.assertEqual(parser.feed(packet[:5]), [])
         decoded = parser.feed(packet[5:])
@@ -22,7 +22,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(values["theta"], 1.0)
         self.assertEqual(values["dtheta"], -2.0)
         self.assertEqual(values["dalpha_ref"], -8 / 65536)
-        self.assertEqual(values["pwm_duty"], 321.0)
+        self.assertEqual(values["pwm_applied"], 321.0)
+        self.assertEqual(values["pwm_exc"], 20.0)
 
     def test_crc_error_does_not_emit_packet_and_recovers(self):
         bad = bytearray(frame(TYPE_ACK, 1, b"\x00")); bad[-1] ^= 1

@@ -12,7 +12,7 @@ import serial
 from serial.tools import list_ports
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from protocol import FIELDS, GAIN_DEFAULTS, IDENTIFICATION_FIELDS, Parser, TYPE_ACK, TYPE_TELEMETRY, gain_command, telemetry_values
+from protocol import FIELDS, GAIN_DEFAULTS, IDENTIFICATION_FIELDS, Parser, TYPE_ACK, TYPE_TELEMETRY, gain_command, identification_command, telemetry_values
 
 
 class SerialWorker(QtCore.QThread):
@@ -169,6 +169,12 @@ class MainWindow(QtWidgets.QMainWindow):
         right.addWidget(gain_box)
         self.send_gains.clicked.connect(self.send_gain_values)
         self.send_gains.setEnabled(False)
+        self.ident_button = QtWidgets.QPushButton("开始辨识采集")
+        self.ident_count = QtWidgets.QLabel("记录：0")
+        right.addWidget(self.ident_button); right.addWidget(self.ident_count)
+        self.ident_button.clicked.connect(self.toggle_identification)
+        self.ident_button.setEnabled(False)
+        self.identifying = False
 
     def refresh_ports(self) -> None:
         current = self.port_box.currentData()
@@ -185,6 +191,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.worker.stop(); self.worker = None
             self.connect_button.setText("连接")
             self.send_gains.setEnabled(False)
+            self.ident_button.setEnabled(False)
             self.pending_gain_seq = None
             return
         port = self.port_box.currentData()
@@ -196,6 +203,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.start()
         self.connect_button.setText("断开")
         self.send_gains.setEnabled(True)
+        self.ident_button.setEnabled(True)
 
     @QtCore.Slot(int, int, bytes)
     def on_packet(self, kind: int, sequence: int, payload: bytes) -> None:
@@ -207,7 +215,9 @@ class MainWindow(QtWidgets.QMainWindow):
             now = time.monotonic() - self.start_time
             values["time"] = now
             values["wall_time"] = datetime.now().isoformat(timespec="milliseconds")
-            self.rows.append(values.copy())
+            if self.identifying:
+                self.rows.append(values.copy())
+                self.ident_count.setText(f"记录：{len(self.rows)}")
             if self.paused:
                 return
             for key in FIELDS:
@@ -245,7 +255,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"摆杆速度 {values['dtheta']:+.3f} / 目标 {values['dtheta_ref']:+.3f} rad/s\n"
             f"转臂 α {values['alpha']:+.3f} / 目标 {values['alpha_ref']:+.3f} rad\n"
             f"转臂速度 {values['dalpha']:+.3f} / 目标 {values['dalpha_ref']:+.3f} rad/s"
-            f"\nPWM 占空比 {int(values['pwm_duty'])} / 1000"
+            f"\nPWM {int(values['pwm_applied'])}，PRBS {int(values['pwm_exc'])}"
         )
 
     def send_gain_values(self) -> None:
@@ -261,6 +271,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.gain_result.setText(f"已发送序号 {self.sequence}，等待 FPGA 应答…")
         self.sequence = (self.sequence + 1) & 0xFF
 
+    def toggle_identification(self) -> None:
+        if not self.worker or not self.worker.isRunning(): return
+        self.identifying = not self.identifying
+        self.worker.send(identification_command(self.sequence, self.identifying))
+        self.sequence = (self.sequence + 1) & 0xFF
+        if self.identifying:
+            self.rows.clear(); self.ident_count.setText("记录：0"); self.ident_button.setText("停止辨识采集")
+        else: self.ident_button.setText("开始辨识采集")
+
     def toggle_pause(self) -> None:
         self.paused = not self.paused
         self.pause_button.setText("继续曲线" if self.paused else "暂停曲线")
@@ -275,7 +294,7 @@ class MainWindow(QtWidgets.QMainWindow):
         with open(filename, "w", newline="", encoding="utf-8-sig") as stream:
             writer = csv.DictWriter(stream, fieldnames=columns)
             writer.writeheader()
-            writer.writerows({key: row[key] for key in columns} for row in self.rows)
+            writer.writerows({key: (row["time"] if key == "time_s" else row[key]) for key in columns} for row in self.rows)
         self.status.setText(f"已保存 {len(self.rows)} 条记录")
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
