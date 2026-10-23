@@ -12,7 +12,7 @@ import serial
 from serial.tools import list_ports
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from protocol import FIELDS, GAIN_DEFAULTS, Parser, TYPE_ACK, TYPE_TELEMETRY, gain_command, telemetry_values
+from protocol import FIELDS, GAIN_DEFAULTS, IDENTIFICATION_FIELDS, Parser, TYPE_ACK, TYPE_TELEMETRY, gain_command, telemetry_values
 
 
 class SerialWorker(QtCore.QThread):
@@ -245,6 +245,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"摆杆速度 {values['dtheta']:+.3f} / 目标 {values['dtheta_ref']:+.3f} rad/s\n"
             f"转臂 α {values['alpha']:+.3f} / 目标 {values['alpha_ref']:+.3f} rad\n"
             f"转臂速度 {values['dalpha']:+.3f} / 目标 {values['dalpha_ref']:+.3f} rad/s"
+            f"\nPWM 占空比 {int(values['pwm_duty'])} / 1000"
         )
 
     def send_gain_values(self) -> None:
@@ -270,7 +271,7 @@ class MainWindow(QtWidgets.QMainWindow):
         filename, _ = QtWidgets.QFileDialog.getSaveFileName(self, "保存遥测数据", "furuta_telemetry.csv", "CSV 文件 (*.csv)")
         if not filename:
             return
-        columns = ["wall_time", "time", *FIELDS]
+        columns = list(IDENTIFICATION_FIELDS)
         with open(filename, "w", newline="", encoding="utf-8-sig") as stream:
             writer = csv.DictWriter(stream, fieldnames=columns)
             writer.writeheader(); writer.writerows(self.rows)

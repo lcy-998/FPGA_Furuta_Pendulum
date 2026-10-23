@@ -8,7 +8,8 @@ SYNC = 0xA5
 TYPE_TELEMETRY = 0x01
 TYPE_SET_GAINS = 0x10
 TYPE_ACK = 0x81
-FIELDS = ("theta", "dtheta", "alpha", "dalpha", "theta_ref", "dtheta_ref", "alpha_ref", "dalpha_ref")
+FIELDS = ("theta", "dtheta", "alpha", "dalpha", "theta_ref", "dtheta_ref", "alpha_ref", "dalpha_ref", "pwm_duty")
+IDENTIFICATION_FIELDS = ("theta", "dtheta", "alpha", "dalpha", "pwm_duty")
 GAIN_DEFAULTS = (-40059 / 1024, -696 / 1024, -9062 / 1024, -3994 / 1024, 0.0)
 
 
@@ -78,6 +79,8 @@ class Parser:
 
 
 def telemetry_values(payload: bytes) -> dict[str, float]:
-    if len(payload) != 32:
+    if len(payload) != 36:
         raise ValueError(f"遥测长度错误：{len(payload)}")
-    return {name: raw / 65536.0 for name, raw in zip(FIELDS, struct.unpack("<8i", payload))}
+    values = {name: raw / 65536.0 for name, raw in zip(FIELDS[:8], struct.unpack("<8i", payload[:32]))}
+    values["pwm_duty"] = float(struct.unpack("<I", payload[32:])[0])
+    return values
