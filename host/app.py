@@ -221,6 +221,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.telemetry_time += max(1, steps) * 0.01
             self.last_telemetry_seq = sequence
             now = self.telemetry_time
+            values["telemetry_seq"] = sequence
             values["time"] = now
             values["wall_time"] = datetime.now().isoformat(timespec="milliseconds")
             if self.identifying:

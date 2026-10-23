@@ -231,13 +231,14 @@ module j280_hw_top #(
     wire ident_enable;
     wire signed [15:0] prbs_exc;
     wire signed [15:0] pwm_command;
+    wire signed [15:0] pwm_applied_duty;
     uart_control_link #(.CLK_HZ(CLK_FREQ_HZ), .BAUD(115200)) u_pc_link (
         .clk(clk_50m), .rst_n(rst_n), .rx(uart_rx), .tx(uart_tx), .sample_done(sample_done),
         .theta_q16(theta_err_q16), .dtheta_q16(dtheta_q16),
         .alpha_q16(alpha_rad_q16), .dalpha_q16(dalpha_rad_s_q16),
         .theta_ref_q16(32'sd0), .dtheta_ref_q16(32'sd0),
         .alpha_ref_q16(alpha_ref_q16), .dalpha_ref_q16(dalpha_ref_q16),
-        .pwm_duty(pwm_command), .pwm_exc(prbs_exc), .ident_enable(ident_enable),
+        .pwm_duty(pwm_applied_duty), .pwm_exc(prbs_exc), .ident_enable(ident_enable),
         .gain_k1(gain_k1), .gain_k2(gain_k2), .gain_k3(gain_k3), .gain_k4(gain_k4), .gain_k5(gain_k5),
         .last_command_seq(pc_gain_seq), .last_command_status(pc_gain_status)
     );
@@ -422,7 +423,7 @@ module j280_hw_top #(
         .dir_out    (motor_dir),
         .in1_out    (motor_in1),
         .in2_out    (motor_in2),
-        .stby_out   (motor_stby)
+        .stby_out   (motor_stby), .applied_duty(pwm_applied_duty)
     );
 
     // -------------------------------------------------------------------------

@@ -30,7 +30,8 @@ module pwm_driver #(
     // 输出信号: 兼容典型 H 桥芯片 (TB6612FNG, A4950, DRV8833)
     output reg                    in1_out,        // H 桥输入引脚 1
     output reg                    in2_out,        // H 桥输入引脚 2
-    output wire                   stby_out        // TB6612 专用待机休眠引脚 (高电平工作)
+    output wire                   stby_out,       // TB6612 专用待机休眠引脚 (高电平工作)
+    output wire signed [15:0]     applied_duty    // 死区补偿、限幅后的实际有符号 PWM
 );
 
     // -------------------------------------------------------------------------
@@ -63,6 +64,8 @@ module pwm_driver #(
     wire [15:0] duty_compensated = (duty_clamped == 16'd0) ? 16'd0 :
                                    ((duty_clamped + DEAD_BAND_VAL > DUTY_MAX_VAL) ?
                                     DUTY_MAX_VAL : (duty_clamped + DEAD_BAND_VAL));
+    assign applied_duty = (motor_en && duty_compensated != 16'd0) ?
+                         (dir_detected ? -$signed(duty_compensated) : $signed(duty_compensated)) : 16'sd0;
 
     // 计算实际比较门限值: 消除硬件运行时除法器 (E4 整改)
     // 采用编译期常数 Q16 比例系数 SCALE_Q16 = (TIMER_PERIOD * 65536) / DUTY_MAX_VAL

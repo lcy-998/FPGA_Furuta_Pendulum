@@ -5,12 +5,13 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.linalg import solve_discrete_are
+from scipy.signal import savgol_filter
 
 FIELDS = ["time_s", "theta", "dtheta", "alpha", "dalpha", "pwm_applied", "pwm_exc"]
 
 # LQR 权重设置位置：状态顺序 [theta, dtheta, alpha, dalpha]，输入为 PWM。
 # 提高某项 Q 对角线元素会更强地抑制对应状态；提高 R 会减少 PWM 动作。
-LQR_Q = np.diag([250.0, 8.0, 20.0, 2.0])
+LQR_Q = np.diag([20.0, 8.0, 8.0, 2.0])
 LQR_R = np.array([[1.0]])
 
 def fit(csv_path: Path, out: Path, sample_period: float | None):
@@ -36,14 +37,25 @@ def fit(csv_path: Path, out: Path, sample_period: float | None):
     df = df.loc[good]
     df = df[(df.theta.abs() < 0.2) & (df.pwm_applied.abs() < 950)]
     if len(df) < 200: raise ValueError("有效直立小扰动样本不足 200 条")
-    x = df[["theta","dtheta","alpha","dalpha"]].to_numpy()
+    # FPGA velocity paths are filtered with a different delay than angle paths.
+    # Reconstruct both velocities from synchronized angles for state consistency.
+    theta = df.theta.to_numpy(); alpha = df.alpha.to_numpy()
+    window = min(21, len(df) if len(df) % 2 else len(df) - 1)
+    window = max(5, window)
+    dtheta = savgol_filter(theta, window, 3, deriv=1, delta=median_dt)
+    dalpha = savgol_filter(alpha, window, 3, deriv=1, delta=median_dt)
+    x = np.c_[theta, dtheta, alpha, dalpha]
     u = df[["pwm_applied"]].to_numpy()
     z = df[["pwm_exc"]].to_numpy()
-    X0, X1, U, Z = x[:-1], x[1:], u[:-1], z[:-1]
-    # Ridge OLS initial estimate.  PRBS is independent and reported for diagnostics.
+    # Use delayed independent PRBS samples as instruments to avoid closed-loop OLS bias.
+    lag = 12
+    X0, X1, U = x[lag:-1], x[lag+1:], u[lag:-1]
     phi = np.c_[X0, U, np.ones(len(X0))]
-    ridge = 1e-6 * np.eye(phi.shape[1])
-    coef = np.linalg.solve(phi.T @ phi + ridge, phi.T @ X1)
+    instruments = np.c_[np.ones(len(X0)), *[z[lag-i:-1-i, 0] for i in range(lag)]]
+    normal = instruments.T @ phi
+    if np.linalg.matrix_rank(normal) < phi.shape[1]:
+        raise ValueError("PRBS 激励秩不足；请采集至少 60 秒、±20 PWM 的有效辨识数据")
+    coef = np.linalg.pinv(normal) @ instruments.T @ X1
     A, B, c = coef[:4].T, coef[4:5].T, coef[5]
     pred = X0 @ A.T + U @ B.T + c
     rmse = np.sqrt(np.mean((X1 - pred) ** 2, axis=0))
@@ -52,7 +64,7 @@ def fit(csv_path: Path, out: Path, sample_period: float | None):
     K = np.linalg.solve(B.T @ P @ B + LQR_R, B.T @ P @ A)
     K_q10 = np.rint(K * 1024).astype(int)
     out.mkdir(parents=True, exist_ok=True)
-    result = {"dt_s": median_dt, "samples": int(len(X0)), "A": A.tolist(), "B": B.tolist(), "c": c.tolist(), "rmse": rmse.tolist(), "poles": [[float(v.real),float(v.imag)] for v in eig], "prbs_rms": float(np.sqrt(np.mean(Z**2))), "Q": LQR_Q.tolist(), "R": LQR_R.tolist(), "K": K.tolist(), "K_q10": K_q10.tolist()}
+    result = {"dt_s": median_dt, "samples": int(len(X0)), "method": "closed_loop_iv_prbs_lag12", "A": A.tolist(), "B": B.tolist(), "c": c.tolist(), "rmse": rmse.tolist(), "poles": [[float(v.real),float(v.imag)] for v in eig], "prbs_rms": float(np.sqrt(np.mean(z**2))), "Q": LQR_Q.tolist(), "R": LQR_R.tolist(), "K": K.tolist(), "K_q10": K_q10.tolist()}
     (out / "identified_model.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     pd.DataFrame(A).to_csv(out / "A.csv", index=False); pd.DataFrame(B).to_csv(out / "B.csv", index=False); pd.DataFrame(K).to_csv(out / "K.csv", index=False)
     fig, axes = plt.subplots(4, 1, figsize=(10, 8), sharex=True)
