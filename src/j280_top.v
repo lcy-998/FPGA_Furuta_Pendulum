@@ -388,7 +388,7 @@ module j280_hw_top #(
         .CLK_FREQ_HZ   (50_000_000),
         .PWM_FREQ_HZ   (20_000),
         .DUTY_MAX_VAL  (1000),
-        .DEAD_BAND_VAL (0)               // [设计说明 D9]: 设为 0 消除零点跳跃引发的极限环振荡; 静摩擦死区由 32 位积分累加器自适应消除
+        .DEAD_BAND_VAL (50)              // 非零指令额外补偿 50 PWM，补偿后仍限制在 1000
     ) u_motor_driver (
         .clk        (clk_50m),
         .rst_n      (rst_n),
