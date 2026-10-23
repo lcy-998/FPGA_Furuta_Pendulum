@@ -7,14 +7,18 @@ import matplotlib.pyplot as plt
 
 FIELDS = ["time_s", "theta", "dtheta", "alpha", "dalpha", "pwm_applied", "pwm_exc"]
 
-def fit(csv_path: Path, out: Path):
+def fit(csv_path: Path, out: Path, sample_period: float | None):
     df = pd.read_csv(csv_path)
     missing = set(FIELDS) - set(df.columns)
     if missing: raise ValueError(f"CSV 缺少列: {sorted(missing)}")
     df = df[FIELDS].dropna().sort_values("time_s")
     dt = np.diff(df.time_s.to_numpy())
     median_dt = float(np.median(dt))
-    if not 0.005 <= median_dt <= 0.02: raise ValueError(f"采样周期异常: {median_dt:.6f}s")
+    if not 0.005 <= median_dt <= 0.02:
+        if sample_period is None:
+            raise ValueError(f"采样周期异常: {median_dt:.6f}s；旧 CSV 请加 --sample-period 0.01")
+        df["time_s"] = np.arange(len(df)) * sample_period
+        dt = np.diff(df.time_s.to_numpy()); median_dt = sample_period
     good = np.r_[True, np.isclose(dt, median_dt, rtol=0.2)]
     df = df.loc[good]
     df = df[(df.theta.abs() < 0.2) & (df.pwm_applied.abs() < 950)]
@@ -42,4 +46,4 @@ def fit(csv_path: Path, out: Path):
     print(json.dumps(result, indent=2))
 
 if __name__ == "__main__":
-    p=argparse.ArgumentParser(); p.add_argument("csv", type=Path); p.add_argument("--out", type=Path, default=Path("identification_result")); a=p.parse_args(); fit(a.csv,a.out)
+    p=argparse.ArgumentParser(); p.add_argument("csv", type=Path); p.add_argument("--out", type=Path, default=Path("identification_result")); p.add_argument("--sample-period", type=float); a=p.parse_args(); fit(a.csv,a.out,a.sample_period)

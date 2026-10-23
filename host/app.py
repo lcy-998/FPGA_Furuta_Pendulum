@@ -98,6 +98,8 @@ class MainWindow(QtWidgets.QMainWindow):
         }
         self.latest_values: dict[str, float] | None = None
         self.latest_time = 0.0
+        self.telemetry_time = 0.0
+        self.last_telemetry_seq: int | None = None
         self._build_ui()
         self.refresh_ports()
         self.plot_timer = QtCore.QTimer(self)
@@ -212,7 +214,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 values = telemetry_values(payload)
             except ValueError as exc:
                 self.status.setText(str(exc)); return
-            now = time.monotonic() - self.start_time
+            # UART read may deliver a batch of frames at once; rebuild the 100Hz
+            # FPGA timeline from the frame sequence instead of local receive time.
+            if self.last_telemetry_seq is not None:
+                steps = (sequence - self.last_telemetry_seq) & 0xFF
+                self.telemetry_time += max(1, steps) * 0.01
+            self.last_telemetry_seq = sequence
+            now = self.telemetry_time
             values["time"] = now
             values["wall_time"] = datetime.now().isoformat(timespec="milliseconds")
             if self.identifying:
@@ -277,7 +285,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.send(identification_command(self.sequence, self.identifying))
         self.sequence = (self.sequence + 1) & 0xFF
         if self.identifying:
-            self.rows.clear(); self.ident_count.setText("记录：0"); self.ident_button.setText("停止辨识采集")
+            self.rows.clear(); self.telemetry_time = 0.0; self.last_telemetry_seq = None
+            self.ident_count.setText("记录：0"); self.ident_button.setText("停止辨识采集")
         else: self.ident_button.setText("开始辨识采集")
 
     def toggle_pause(self) -> None:
