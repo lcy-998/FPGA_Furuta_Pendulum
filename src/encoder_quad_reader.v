@@ -125,6 +125,24 @@ module encoder_quad_reader #(
         endcase
     end
 
+    // M/T 混合测速：记录相邻有效编码器边沿的 50MHz 周期。
+    localparam integer EDGE_TIMEOUT_TICKS = CLK_FREQ_HZ / 20; // 50ms 无边沿视为静止
+    reg [31:0] edge_period_ticks, edge_age_ticks;
+    reg edge_seen, edge_negative, mt_start;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin edge_period_ticks<=0; edge_age_ticks<=0; edge_seen<=0; edge_negative<=0; mt_start<=0; end
+        else if (clear_pos) begin edge_period_ticks<=0; edge_age_ticks<=0; edge_seen<=0; edge_negative<=0; mt_start<=0; end
+        else begin
+            mt_start <= 1'b0;
+            if (count_step != 2'sd0) begin
+                if (edge_seen) begin edge_period_ticks<=edge_age_ticks; mt_start<=1'b1; end
+                edge_age_ticks<=32'd1;
+                edge_negative<=(REVERSE_DIR==0) ? count_step[1] : ~count_step[1];
+                edge_seen<=1'b1;
+            end else if (edge_age_ticks != 32'hffff_ffff) edge_age_ticks<=edge_age_ticks+1'b1;
+        end
+    end
+
     // -------------------------------------------------------------------------
     // -------------------------------------------------------------------------
     // 4. 绝对脉冲累加器 (含 Z 相零位复位支持 D4)
@@ -200,6 +218,12 @@ module encoder_quad_reader #(
     wire signed [35:0] pulse_mult_36    = pulse_cnt_18 * K_ANGLE_18;
     wire signed [35:0] delta_mult_36    = delta_cnt_18 * K_VEL_18;
     wire signed [31:0] alpha_shifted    = pulse_mult_36 >>> 10;
+    wire signed [31:0] mt_dalpha_q16;
+    wire mt_valid, mt_done;
+    mt_period_velocity u_mt_period_velocity(.clk(clk),.rst_n(rst_n),.start(mt_start),.period_ticks(edge_period_ticks),.negative(edge_negative),.velocity_q16(mt_dalpha_q16),.valid(mt_valid),.done(mt_done));
+    wire [31:0] abs_delta_pulse = delta_pulse_now[31] ? -delta_pulse_now : delta_pulse_now;
+    wire use_mt_velocity = (abs_delta_pulse < 32'd4) && edge_seen && mt_valid && (edge_age_ticks < EDGE_TIMEOUT_TICKS);
+    wire signed [31:0] raw_velocity_selected = use_mt_velocity ? mt_dalpha_q16 : ((edge_age_ticks >= EDGE_TIMEOUT_TICKS) ? 32'sd0 : delta_mult_36[31:0]);
 
     // 拍 2: 基于已打拍的 raw_dalpha_q16 计算差值并送乘法器 (拆分长组合路径)
     wire signed [31:0] diff_for_iir     = raw_dalpha_q16 - dalpha_iir_q16;
@@ -246,7 +270,7 @@ module encoder_quad_reader #(
             pulse_count_prev <= pulse_count;
             speed_pps        <= delta_pulse_now * 32'sd1000;
             alpha_rad_q16    <= alpha_shifted[31:0];
-            raw_dalpha_q16   <= delta_mult_36[31:0];
+            raw_dalpha_q16   <= raw_velocity_selected;
             dalpha_avg_start <= 1'b0;
             filter_step      <= 2'd1;
         end else if (filter_step == 2'd1) begin
@@ -269,4 +293,36 @@ module encoder_quad_reader #(
         end
     end
 
+endmodule
+
+// T 法：2*pi*50MHz/4000 的 Q16 常数除以相邻边沿周期；34 周期恢复除法。
+module mt_period_velocity(
+    input wire clk,
+    input wire rst_n,
+    input wire start,
+    input wire [31:0] period_ticks,
+    input wire negative,
+    output reg signed [31:0] velocity_q16,
+    output reg valid,
+    output reg done
+);
+    localparam [33:0] NUMERATOR_Q16 = 34'd5147185404;
+    reg busy, result_negative; reg [31:0] divisor; reg [33:0] dividend_shift, quotient_shift; reg [32:0] remainder; reg [5:0] count;
+    wire [32:0] remainder_shifted = {remainder[31:0], dividend_shift[33]};
+    wire quotient_bit = (remainder_shifted >= {1'b0,divisor});
+    wire [32:0] remainder_next = quotient_bit ? remainder_shifted-{1'b0,divisor} : remainder_shifted;
+    wire [33:0] quotient_next = {quotient_shift[32:0],quotient_bit};
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n) begin busy<=0; result_negative<=0; divisor<=1; dividend_shift<=0; quotient_shift<=0; remainder<=0; count<=0; velocity_q16<=0; valid<=0; done<=0; end
+        else begin
+            done<=0;
+            if(!busy) begin
+                if(start && period_ticks!=0) begin busy<=1; result_negative<=negative; divisor<=period_ticks; dividend_shift<=NUMERATOR_Q16; quotient_shift<=0; remainder<=0; count<=0; end
+            end else begin
+                dividend_shift<={dividend_shift[32:0],1'b0}; quotient_shift<=quotient_next; remainder<=remainder_next;
+                if(count==6'd33) begin velocity_q16<=result_negative ? -$signed(quotient_next[31:0]) : $signed(quotient_next[31:0]); valid<=1; done<=1; busy<=0; end
+                else count<=count+1'b1;
+            end
+        end
+    end
 endmodule

@@ -15,7 +15,7 @@ module pwm_driver #(
     parameter integer CLK_FREQ_HZ   = 50_000_000, // 系统主时钟频率 (默认 50MHz)
     parameter integer PWM_FREQ_HZ   = 20_000,     // PWM 载波频率 (默认 20kHz)
     parameter integer DUTY_MAX_VAL  = 1000,       // 占空比最大计数值 (对应 100% 满占空比)
-    parameter integer DEAD_BAND_VAL = 0           // 硬件死区补偿值 (单位: 占空比计数值)
+    parameter integer DEAD_BAND_VAL = 50          // 硬件死区补偿值 (单位: 占空比计数值)
 )(
     input  wire                   clk,            // 系统时钟 (50MHz)
     input  wire                   rst_n,          // 异步低电平复位
