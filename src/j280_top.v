@@ -6,7 +6,7 @@
 //           将电机驱动、编码器测速测角、摆杆角度传感器、LQI 姿态控制核互联
 //           集成:
 //           1. 由 GD32 1kHz 有效采样帧驱动的控制流水线
-//           2. 固定摆角端点（直立 ADC=1268，最低点 ADC=400）；KEY1 控制运行/停机
+//           2. 固定摆角端点（直立 ADC=1287，最低点 ADC=400）；KEY1 控制运行/停机
 //           3. 复合按键交互: 短按轮换控制模式(0°/±45°定点/0.2Hz正弦跟踪)，长按清零转臂位置
 //           4. 起摆能量泵 (P1) 与 4 态控制状态机 (STATE_HANGING / SWINGUP / BALANCE / PROTECT)
 //           5. 解决跌落保护结构性冲突 (P1/D2): 起摆态放行大角度，仅平衡态触发跌落自锁
@@ -157,7 +157,7 @@ module j280_hw_top #(
         .framing_err(adc_framing_err)
     );
 
-    angle_sensor_reader #(.INVERT_DIR(0), .TOP_RAW(12'd1268), .BOTTOM_RAW(12'd400)) u_angle_sensor (
+    angle_sensor_reader #(.INVERT_DIR(0), .TOP_RAW(12'd1290), .BOTTOM_RAW(12'd400)) u_angle_sensor (
         .clk            (clk_50m),
         .rst_n          (rst_n),
         .raw_valid     (adc_valid),
