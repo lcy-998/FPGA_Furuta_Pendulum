@@ -14,6 +14,7 @@
         <File path="src/pwm_driver.v" type="file.verilog" enable="1"/>
         <File path="src/swing_up_ctrl.v" type="file.verilog" enable="1"/>
         <File path="src/traj_gen.v" type="file.verilog" enable="1"/>
+        <File path="src/uart_control_link.v" type="file.verilog" enable="1"/>
         <File path="src/my_fpga.cst" type="file.cst" enable="1"/>
         <File path="src/my_fpga.sdc" type="file.sdc" enable="1"/>
         <File path="src/my_fpga.rao" type="file.gao" enable="1"/>

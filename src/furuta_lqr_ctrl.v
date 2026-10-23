@@ -21,6 +21,11 @@ module furuta_lqr_ctrl (
     input  wire signed [31:0] alpha_err,   // 转臂位置偏差 (rad, alpha - alpha_target)
     input  wire signed [31:0] dalpha,      // 转臂角速度 (rad/s)
     input  wire signed [31:0] alpha_int,   // 保留接口；当前积分增益为 0
+    input  wire signed [17:0] gain_k1,
+    input  wire signed [17:0] gain_k2,
+    input  wire signed [17:0] gain_k3,
+    input  wire signed [17:0] gain_k4,
+    input  wire signed [17:0] gain_k5,
 
     // 控制输出
     output reg  signed [15:0] pwm_duty,    // 输出至电机驱动模块的 PWM 占空比 [-1000, +1000]
@@ -32,12 +37,6 @@ module furuta_lqr_ctrl (
     // K = [-87.1845, -9.6412, -9.7622, -5.7926, -4.0]
     // Q10 格式乘以 1024 并四舍五入，使用 18 位有符号数。
     // -------------------------------------------------------------------------
-    localparam signed [17:0] K1_18 = -18'sd49277;
-    localparam signed [17:0] K2_18 = -18'sd0103;
-    localparam signed [17:0] K3_18 = -18'sd0600;
-    localparam signed [17:0] K4_18 = -18'sd0000;
-    localparam signed [17:0] K5_18 = -18'sd0100;
-
     // 电压到 PWM 占空比缩放因子 (1000/12 = 83.3333; 83.3333 * 1024 = 85333, 18-bit, 误差 0.0004%)
     localparam signed [17:0] VOLT_TO_PWM_18 = 18'sd85333;
     localparam signed [15:0] PWM_MAX        = 16'sd1000;
@@ -58,11 +57,11 @@ module furuta_lqr_ctrl (
             prod5        <= 50'sd0;
             stage1_valid <= 1'b0;
         end else if (calc_en) begin
-            prod1        <= $signed(theta_err) * K1_18;
-            prod2        <= $signed(dtheta)    * K2_18;
-            prod3        <= $signed(alpha_err) * K3_18;
-            prod4        <= $signed(dalpha)    * K4_18;
-            prod5        <= $signed(alpha_int) * K5_18;
+            prod1        <= $signed(theta_err) * $signed(gain_k1);
+            prod2        <= $signed(dtheta)    * $signed(gain_k2);
+            prod3        <= $signed(alpha_err) * $signed(gain_k3);
+            prod4        <= $signed(dalpha)    * $signed(gain_k4);
+            prod5        <= $signed(alpha_int) * $signed(gain_k5);
             stage1_valid <= 1'b1;
         end else begin
             stage1_valid <= 1'b0;

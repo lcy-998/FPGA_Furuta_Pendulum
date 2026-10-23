@@ -5,3 +5,10 @@ parsetab.py
 
 # Local Gowin Designer user state
 *.gprj.user
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]
+
+# Project-local Python environment
+.venv/
