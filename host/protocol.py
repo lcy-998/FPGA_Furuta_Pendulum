@@ -10,7 +10,7 @@ TYPE_SET_GAINS = 0x10
 TYPE_IDENT = 0x12
 TYPE_ACK = 0x81
 FIELDS = ("theta", "dtheta", "alpha", "dalpha", "theta_ref", "dtheta_ref", "alpha_ref", "dalpha_ref", "pwm_applied", "pwm_exc", "ident_active")
-IDENTIFICATION_FIELDS = ("time_s", "telemetry_seq", "theta", "dtheta", "alpha", "dalpha", "pwm_applied", "pwm_exc")
+IDENTIFICATION_FIELDS = ("time_s", "telemetry_seq", "theta", "dtheta", "alpha", "alpha_ref", "dalpha", "pwm_applied", "pwm_exc")
 GAIN_DEFAULTS = (-40059 / 1024, -696 / 1024, -9062 / 1024, -3994 / 1024, 0.0)
 
 

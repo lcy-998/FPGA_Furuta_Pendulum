@@ -394,7 +394,7 @@ module j280_hw_top #(
                        (theta_err_q16 > -32'sd13107) && (theta_err_q16 < 32'sd13107) && !adc_stale;
     always @(posedge clk_50m or negedge rst_n) begin
         if (!rst_n) begin prbs_lfsr<=16'h1; prbs_div<=0; end
-        else if (!prbs_active) begin prbs_lfsr<=16'h1; prbs_div<=0; end
+        else if (!ident_enable) begin prbs_lfsr<=16'h1; prbs_div<=0; end
         else if (sample_done) begin
             if (prbs_div == 6'd49) begin prbs_div<=0; prbs_lfsr<={prbs_lfsr[14:0],prbs_lfsr[15]^prbs_lfsr[13]^prbs_lfsr[12]^prbs_lfsr[10]}; end
             else prbs_div<=prbs_div+1'b1;

@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from scipy.linalg import solve_discrete_are
 from scipy.signal import savgol_filter
 
-FIELDS = ["time_s", "theta", "dtheta", "alpha", "dalpha", "pwm_applied", "pwm_exc"]
+FIELDS = ["time_s", "theta", "dtheta", "alpha", "alpha_ref", "dalpha", "pwm_applied", "pwm_exc"]
 
 # LQR 权重设置位置：状态顺序 [theta, dtheta, alpha, dalpha]，输入为 PWM。
 # 提高某项 Q 对角线元素会更强地抑制对应状态；提高 R 会减少 PWM 动作。
@@ -21,6 +21,8 @@ def fit(csv_path: Path, out: Path, sample_period: float | None):
         df = df.rename(columns={"pwm_duty": "pwm_applied"})
     if "pwm_exc" not in df:
         df["pwm_exc"] = 0.0
+    if "alpha_ref" not in df:
+        df["alpha_ref"] = 0.0
     if "time_s" not in df:
         df["time_s"] = np.arange(len(df)) * (sample_period or 0.01)
     missing = set(FIELDS) - set(df.columns)
@@ -33,38 +35,38 @@ def fit(csv_path: Path, out: Path, sample_period: float | None):
         print(f"警告：旧 CSV 的时间戳间隔为 {float(np.median(dt)):.6f}s，按 {median_dt:.3f}s 重建时间轴")
         df["time_s"] = np.arange(len(df)) * median_dt
         dt = np.diff(df.time_s.to_numpy())
-    good = np.r_[True, np.isclose(dt, median_dt, rtol=0.2)]
-    df = df.loc[good]
-    df = df[(df.theta.abs() < 0.2) & (df.pwm_applied.abs() < 950)]
-    if len(df) < 200: raise ValueError("有效直立小扰动样本不足 200 条")
-    # FPGA velocity paths are filtered with a different delay than angle paths.
-    # Reconstruct both velocities from synchronized angles for state consistency.
-    theta = df.theta.to_numpy(); alpha = df.alpha.to_numpy()
-    window = min(21, len(df) if len(df) % 2 else len(df) - 1)
-    window = max(5, window)
-    dtheta = savgol_filter(theta, window, 3, deriv=1, delta=median_dt)
-    dalpha = savgol_filter(alpha, window, 3, deriv=1, delta=median_dt)
-    x = np.c_[theta, dtheta, alpha, dalpha]
-    u = df[["pwm_applied"]].to_numpy()
-    z = df[["pwm_exc"]].to_numpy()
-    # Use delayed independent PRBS samples as instruments to avoid closed-loop OLS bias.
     lag = 12
-    X0, X1, U = x[lag:-1], x[lag+1:], u[lag:-1]
-    phi = np.c_[X0, U, np.ones(len(X0))]
-    instruments = np.c_[np.ones(len(X0)), *[z[lag-i:-1-i, 0] for i in range(lag)]]
+    valid = (df.theta.abs() < 0.2) & (df.pwm_applied.abs() < 950)
+    continuous = np.r_[True, np.isclose(np.diff(df.time_s), median_dt, rtol=0.2)]
+    segment = ((~valid) | (~continuous)).cumsum()
+    phis=[]; targets=[]; instruments_all=[]; used=0
+    for _, part in df[valid].groupby(segment[valid.to_numpy()]):
+        if len(part) < 200: continue
+        theta=part.theta.to_numpy(); alpha=(part.alpha-part.alpha_ref).to_numpy()
+        dtheta=savgol_filter(theta, 21, 3, deriv=1, delta=median_dt)
+        dalpha=savgol_filter(alpha, 21, 3, deriv=1, delta=median_dt)
+        x=np.c_[theta,dtheta,alpha,dalpha]; u=part.pwm_applied.to_numpy(); z=part.pwm_exc.to_numpy()-part.pwm_exc.mean()
+        phis.append(np.c_[x[lag:-1],u[lag:-1],np.ones(len(x)-lag-1)])
+        targets.append(x[lag+1:])
+        instruments_all.append(np.c_[np.ones(len(x)-lag-1),*[z[lag-i:-1-i] for i in range(lag)]])
+        used += len(x)-lag-1
+    if not phis: raise ValueError("没有长度至少 200 点的连续有效直立片段")
+    phi=np.vstack(phis); X1=np.vstack(targets); instruments=np.vstack(instruments_all)
     normal = instruments.T @ phi
-    if np.linalg.matrix_rank(normal) < phi.shape[1]:
-        raise ValueError("PRBS 激励秩不足；请采集至少 60 秒、±20 PWM 的有效辨识数据")
+    condition = np.linalg.cond(normal)
+    if np.linalg.matrix_rank(normal) < phi.shape[1] or condition > 1e4:
+        raise ValueError(f"PRBS 激励秩不足或病态（condition={condition:.2e}）；请采集至少 60 秒、±20 PWM 的连续有效辨识数据")
     coef = np.linalg.pinv(normal) @ instruments.T @ X1
     A, B, c = coef[:4].T, coef[4:5].T, coef[5]
-    pred = X0 @ A.T + U @ B.T + c
+    pred = phi[:,:4] @ A.T + phi[:,4:5] @ B.T + c
     rmse = np.sqrt(np.mean((X1 - pred) ** 2, axis=0))
     eig = np.linalg.eigvals(A)
     P = solve_discrete_are(A, B, LQR_Q, LQR_R)
     K = np.linalg.solve(B.T @ P @ B + LQR_R, B.T @ P @ A)
     K_q10 = np.rint(K * 1024).astype(int)
+    if np.any(np.abs(K_q10) > 131071): raise ValueError("识别结果产生超出 FPGA 18 位 Q10 范围的增益，拒绝输出 K")
     out.mkdir(parents=True, exist_ok=True)
-    result = {"dt_s": median_dt, "samples": int(len(X0)), "method": "closed_loop_iv_prbs_lag12", "A": A.tolist(), "B": B.tolist(), "c": c.tolist(), "rmse": rmse.tolist(), "poles": [[float(v.real),float(v.imag)] for v in eig], "prbs_rms": float(np.sqrt(np.mean(z**2))), "Q": LQR_Q.tolist(), "R": LQR_R.tolist(), "K": K.tolist(), "K_q10": K_q10.tolist()}
+    result = {"dt_s": median_dt, "samples": int(used), "method": "closed_loop_iv_prbs_lag12_segmented", "iv_condition": float(condition), "A": A.tolist(), "B": B.tolist(), "c": c.tolist(), "rmse": rmse.tolist(), "poles": [[float(v.real),float(v.imag)] for v in eig], "Q": LQR_Q.tolist(), "R": LQR_R.tolist(), "K": K.tolist(), "K_q10": K_q10.tolist()}
     (out / "identified_model.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     pd.DataFrame(A).to_csv(out / "A.csv", index=False); pd.DataFrame(B).to_csv(out / "B.csv", index=False); pd.DataFrame(K).to_csv(out / "K.csv", index=False)
     fig, axes = plt.subplots(4, 1, figsize=(10, 8), sharex=True)
