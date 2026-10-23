@@ -136,8 +136,9 @@ module uart_control_link #(
     assign gain_k5 = (sample_done && pending_valid && pending_ok) ? pending_word[4][17:0] : active_k5;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            active_k1<=-18'sd49277; active_k2<=-18'sd103; active_k3<=-18'sd600;
-            active_k4<=18'sd0; active_k5<=-18'sd100;
+            // 默认反馈矩阵 [-39.12, -0.680, -8.85, -3.90, -0.00]，Q10。
+            active_k1<=-18'sd40059; active_k2<=-18'sd696; active_k3<=-18'sd9062;
+            active_k4<=-18'sd3994; active_k5<=18'sd0;
             ack_pending<=0; ack_seq<=0; ack_status<=0;
             last_command_seq<=0; last_command_status<=0;
         end else if (sample_done && pending_valid) begin

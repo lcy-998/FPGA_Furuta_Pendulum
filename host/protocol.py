@@ -9,7 +9,7 @@ TYPE_TELEMETRY = 0x01
 TYPE_SET_GAINS = 0x10
 TYPE_ACK = 0x81
 FIELDS = ("theta", "dtheta", "alpha", "dalpha", "theta_ref", "dtheta_ref", "alpha_ref", "dalpha_ref")
-GAIN_DEFAULTS = (-49277 / 1024, -103 / 1024, -600 / 1024, 0.0, -100 / 1024)
+GAIN_DEFAULTS = (-40059 / 1024, -696 / 1024, -9062 / 1024, -3994 / 1024, 0.0)
 
 
 def crc16(data: bytes) -> int:
