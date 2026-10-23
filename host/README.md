@@ -16,11 +16,11 @@ py -3.13 -m venv .venv
 
 | 类型 | 方向 | 载荷 |
 | --- | --- | --- |
-| `01` | FPGA → PC | 每 10 ms 一帧，8 个 int32 Q16.16：`theta, dtheta, alpha, dalpha, theta_ref, dtheta_ref, alpha_ref, dalpha_ref`。角度单位 rad，角速度单位 rad/s。 |
+| `01` | FPGA → PC | 每 10 ms 一帧，8 个 int32 Q16.16：`theta, dtheta, alpha, dalpha, theta_ref, dtheta_ref, alpha_ref, dalpha_ref`，再附加 1 个 uint32 `pwm_duty`（范围 0～1000）。角度单位 rad，角速度单位 rad/s。 |
 | `10` | PC → FPGA | 5 个 int32 Q10：`K1..K5`。FPGA 检查每个数可由有符号 18 位表示，并在采样边界同时应用。 |
 | `81` | FPGA → PC | 1 字节状态：`00` 已应用，`01` 增益范围错误；seq 回显命令序号。 |
 
-摆杆的角度/角速度目标当前为 0；转臂目标与控制器轨迹发生器输出相同。串口接收保持 100 Hz，界面以 20 Hz 合并刷新曲线和动画。曲线保留最近 2000 个点，CSV 环形缓冲区最多保留 60000 条记录（约 10 分钟）。
+摆杆的角度/角速度目标当前为 0；转臂目标与控制器轨迹发生器输出相同。串口接收保持 100 Hz，界面以 20 Hz 合并刷新曲线和动画。点击“导出辨识 CSV”会生成仅含 `theta,dtheta,alpha,dalpha,pwm_duty` 五列的数据表；缓存最多保留 60000 条记录（约 10 分钟）。
 
 ## 硬件接线
 

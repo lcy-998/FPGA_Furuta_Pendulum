@@ -143,7 +143,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left.addWidget(self.angle_plot, 1); left.addWidget(self.speed_plot, 1)
         controls = QtWidgets.QHBoxLayout()
         self.pause_button = QtWidgets.QPushButton("暂停曲线")
-        save_button = QtWidgets.QPushButton("保存 CSV")
+        save_button = QtWidgets.QPushButton("导出辨识 CSV")
         controls.addWidget(self.pause_button); controls.addWidget(save_button); controls.addStretch()
         left.addLayout(controls)
         self.pause_button.clicked.connect(self.toggle_pause)
@@ -268,13 +268,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def save_csv(self) -> None:
         if not self.rows:
             self.status.setText("暂无数据可保存"); return
-        filename, _ = QtWidgets.QFileDialog.getSaveFileName(self, "保存遥测数据", "furuta_telemetry.csv", "CSV 文件 (*.csv)")
+        filename, _ = QtWidgets.QFileDialog.getSaveFileName(self, "导出参数辨识数据", "furuta_identification.csv", "CSV 文件 (*.csv)")
         if not filename:
             return
         columns = list(IDENTIFICATION_FIELDS)
         with open(filename, "w", newline="", encoding="utf-8-sig") as stream:
             writer = csv.DictWriter(stream, fieldnames=columns)
-            writer.writeheader(); writer.writerows(self.rows)
+            writer.writeheader()
+            writer.writerows({key: row[key] for key in columns} for row in self.rows)
         self.status.setText(f"已保存 {len(self.rows)} 条记录")
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
