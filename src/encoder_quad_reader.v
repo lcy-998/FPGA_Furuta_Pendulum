@@ -6,7 +6,7 @@
 //           1. 硬件级双重防亚稳态同步 + 多级数字低通消抖滤波 (滤除电机火花电磁干扰)
 //           2. 严格四倍频 (4x Quadrature Decoding) 硬件状态判向鉴相
 //           3. 32 位有符号绝对脉冲位置计数 (支持掉电/按键归零与 Z 相零位复位)
-//           4. 1ms 定时硬件差分测速 + 一阶数字 IIR 低通平滑滤波 (完全抑制离散量化阶跃噪声)
+//           4. 1ms 定时硬件差分测速 + IIR 低通后 5 点滑动窗口平均滤波
 //           5. 直接输出 Q12.16 定点数转臂角位移 alpha (rad) 与角速度 dalpha (rad/s)
 // =============================================================================
 
@@ -170,7 +170,7 @@ module encoder_quad_reader #(
     // dalpha = delta_pulses / 0.001 * (2 * pi / 4000) = delta_pulses * (pi / 2)
     // 定点数 Q16: (pi / 2) * 65536 = 1.5707963 * 65536 = 102944
     //
-    // 一阶 IIR 滤波参数: dalpha = dalpha + 0.35 * (raw - dalpha)
+    // 一阶 IIR 滤波后，继续对 IIR 输出做 5 点滑动窗口平均。
     // 0.35 * 65536 = 22938 (消除 32 位除法器 / 100)
     // 优化乘法位宽至 18x18 (F10): pulse_count 在软限位 ±2 圈下仅 ±8000 脉冲
     // 18 位有符号数范围 [-131072, +131071] 对应 ±32.7 圈，余量充足
@@ -183,6 +183,11 @@ module encoder_quad_reader #(
     reg signed [31:0] pulse_count_prev;
     reg signed [31:0] delta_pulse;
     reg signed [31:0] raw_dalpha_q16;
+    reg signed [31:0] dalpha_iir_q16;   // IIR 内部状态；与最终滑窗输出分离
+    reg signed [31:0] dalpha_iir_sample_r;
+    reg               dalpha_avg_start;
+    wire signed [31:0] dalpha_avg_q16;
+    wire               dalpha_avg_done;
 
     wire signed [31:0] delta_pulse_now = pulse_count - pulse_count_prev;
 
@@ -197,19 +202,28 @@ module encoder_quad_reader #(
     wire signed [31:0] alpha_shifted    = pulse_mult_36 >>> 10;
 
     // 拍 2: 基于已打拍的 raw_dalpha_q16 计算差值并送乘法器 (拆分长组合路径)
-    wire signed [31:0] diff_for_iir     = raw_dalpha_q16 - dalpha_rad_s_q16;
+    wire signed [31:0] diff_for_iir     = raw_dalpha_q16 - dalpha_iir_q16;
     wire signed [17:0] diff_iir_18      = (diff_for_iir > 32'sd131071) ? 18'sd131071 :
                                           ((diff_for_iir < -32'sd131072) ? -18'sd131072 : diff_for_iir[17:0]);
     wire signed [35:0] iir_diff_mult    = diff_iir_18 * FILTER_ALPHA_18;
     reg  signed [35:0] iir_diff_mult_r;
     wire signed [31:0] iir_diff_shifted = iir_diff_mult_r >>> 16;
+    wire signed [31:0] dalpha_iir_next  = dalpha_iir_q16 + iir_diff_shifted;
     reg  [1:0]         filter_step;
+
+    moving_average_5 u_dalpha_mavg (
+        .clk(clk), .rst_n(rst_n), .start(dalpha_avg_start),
+        .sample_in(dalpha_iir_sample_r), .average_out(dalpha_avg_q16), .done(dalpha_avg_done)
+    );
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             pulse_count_prev <= 32'sd0;
             delta_pulse      <= 32'sd0;
             raw_dalpha_q16   <= 32'sd0;
+            dalpha_iir_q16   <= 32'sd0;
+            dalpha_iir_sample_r <= 32'sd0;
+            dalpha_avg_start <= 1'b0;
             alpha_rad_q16    <= 32'sd0;
             dalpha_rad_s_q16 <= 32'sd0;
             speed_pps        <= 32'sd0;
@@ -220,6 +234,9 @@ module encoder_quad_reader #(
             delta_pulse      <= 32'sd0;
             alpha_rad_q16    <= 32'sd0;
             raw_dalpha_q16   <= 32'sd0;
+            dalpha_iir_q16   <= 32'sd0;
+            dalpha_iir_sample_r <= 32'sd0;
+            dalpha_avg_start <= 1'b0;
             dalpha_rad_s_q16 <= 32'sd0;
             speed_pps        <= 32'sd0;
             filter_step      <= 2'd0;
@@ -230,15 +247,25 @@ module encoder_quad_reader #(
             speed_pps        <= delta_pulse_now * 32'sd1000;
             alpha_rad_q16    <= alpha_shifted[31:0];
             raw_dalpha_q16   <= delta_mult_36[31:0];
+            dalpha_avg_start <= 1'b0;
             filter_step      <= 2'd1;
         end else if (filter_step == 2'd1) begin
             // 拍 2: 寄存 IIR 乘法器输出，彻底切断 DSP 与累加器级联
             iir_diff_mult_r  <= iir_diff_mult;
+            dalpha_avg_start <= 1'b0;
             filter_step      <= 2'd2;
         end else if (filter_step == 2'd2) begin
-            // 拍 3: 更新一阶数字滤波角速度
-            dalpha_rad_s_q16 <= dalpha_rad_s_q16 + iir_diff_shifted[31:0];
-            filter_step      <= 2'd0;
+            // 拍 3: 寄存 IIR 输出，并启动多周期 5 点滑动窗口平均。
+            dalpha_iir_q16 <= dalpha_iir_next;
+            dalpha_iir_sample_r <= dalpha_iir_next;
+            dalpha_avg_start <= 1'b1;
+            filter_step      <= 2'd3;
+        end else if (filter_step == 2'd3) begin
+            dalpha_avg_start <= 1'b0;
+            if (dalpha_avg_done) begin
+                dalpha_rad_s_q16 <= dalpha_avg_q16;
+                filter_step      <= 2'd0;
+            end
         end
     end
 

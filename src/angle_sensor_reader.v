@@ -50,7 +50,7 @@ module angle_sensor_reader #(
     //
     // 角速度计算:
     // 在 1ms 周期内: dtheta_raw = (theta_err_q16 - theta_err_prev) * 1000
-    // 一阶 IIR 滤波: dtheta = dtheta + 0.35 * (dtheta_raw - dtheta)
+    // 先一阶 IIR 低通，再对 IIR 输出做 5 点滑动窗口平均。
     // -------------------------------------------------------------------------
     localparam signed [31:0] TWO_PI_Q16_X4096 = 32'sd1686630400; // 411775 * 4096
     localparam signed [31:0] NEG_SCALE_Q12 = (TWO_PI_Q16_X4096 + NEG_HALF_COUNTS) / (NEG_HALF_COUNTS * 2);
@@ -66,6 +66,11 @@ module angle_sensor_reader #(
     reg signed [31:0] theta_prev_q16;
     reg signed [31:0] diff_raw_r;       // 拍1 寄存: 未解卷绕的角度差值
     reg signed [31:0] raw_dtheta_q16;   // 拍2 寄存: 解卷绕并 ×1000 后的原始角速度
+    reg signed [31:0] dtheta_iir_q16;   // IIR 内部状态；与最终滑窗输出分离
+    reg signed [31:0] dtheta_iir_sample_r;
+    reg               dtheta_avg_start;
+    wire signed [31:0] dtheta_avg_q16;
+    wire               dtheta_avg_done;
     reg        [1:0]  filter_step;      // 3 状态流水步进 (与 encoder_quad_reader 结构一致)
 
     // 拍 1 组合逻辑: 角度尺度变换结果与前一拍角度相减
@@ -101,10 +106,16 @@ module angle_sensor_reader #(
                                            ((raw_dtheta_calc < -DTHETA_PHYS_LIMIT_Q16) ? -DTHETA_PHYS_LIMIT_Q16 :
                                             raw_dtheta_calc);
 
-    // 拍 3 组合逻辑: 针对已寄存的 raw_dtheta_q16 执行 IIR 滤波乘法
-    wire signed [47:0] filter_diff_mult   = $signed(raw_dtheta_q16 - dtheta_q16) * $signed(FILTER_ALPHA_Q16);
+    // 拍 3 组合逻辑: 先执行 IIR，随后将其输出送入 5 点滑动窗口。
+    wire signed [47:0] filter_diff_mult   = $signed(raw_dtheta_q16 - dtheta_iir_q16) * $signed(FILTER_ALPHA_Q16);
     wire signed [47:0] filter_diff_shift  = filter_diff_mult >>> 16;
     wire signed [31:0] filter_diff_q16    = filter_diff_shift[31:0];
+    wire signed [31:0] dtheta_iir_next    = dtheta_iir_q16 + filter_diff_q16;
+
+    moving_average_5 u_dtheta_mavg (
+        .clk(clk), .rst_n(rst_n), .start(dtheta_avg_start),
+        .sample_in(dtheta_iir_sample_r), .average_out(dtheta_avg_q16), .done(dtheta_avg_done)
+    );
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -113,30 +124,135 @@ module angle_sensor_reader #(
             theta_prev_q16   <= 32'sd0;
             diff_raw_r       <= 32'sd0;
             raw_dtheta_q16   <= 32'sd0;
+            dtheta_iir_q16   <= 32'sd0;
+            dtheta_iir_sample_r <= 32'sd0;
             dtheta_q16       <= 32'sd0;
+            dtheta_avg_start <= 1'b0;
             sample_done      <= 1'b0;
             filter_step      <= 2'd0;
         end else if (filter_step == 2'd1) begin
             // 流水拍 2: 解卷绕、限幅滤波并换算为 rad/s (消除盲区虚假尖峰)
             raw_dtheta_q16 <= raw_dtheta_clamped;
+            dtheta_avg_start <= 1'b0;
             filter_step    <= 2'd2;
             sample_done    <= 1'b0;
         end else if (filter_step == 2'd2) begin
-            // 流水拍 3: IIR 低通滤波并产生 sample_done 脉冲
-            dtheta_q16     <= dtheta_q16 + filter_diff_q16;
-            filter_step    <= 2'd0;
-            sample_done    <= 1'b1;
+            // 流水拍 3: 寄存 IIR 输出，并启动多周期 5 点滑动窗口平均。
+            dtheta_iir_q16 <= dtheta_iir_next;
+            dtheta_iir_sample_r <= dtheta_iir_next;
+            dtheta_avg_start <= 1'b1;
+            filter_step    <= 2'd3;
+            sample_done    <= 1'b0;
+        end else if (filter_step == 2'd3) begin
+            dtheta_avg_start <= 1'b0;
+            if (dtheta_avg_done) begin
+                dtheta_q16  <= dtheta_avg_q16;
+                filter_step <= 2'd0;
+                sample_done <= 1'b1;
+            end else begin
+                sample_done <= 1'b0;
+            end
         end else if (raw_valid) begin
             // 流水拍 1: 锁存 ADC 码值、更新角度、寄存未解卷绕差值 (修复 B1: filter_step 优先推进, 防抢占丢采样)
             raw_adc_data   <= raw_data;
             theta_err_q16  <= current_theta_q16;
             theta_prev_q16 <= current_theta_q16;
             diff_raw_r     <= diff_theta_raw;
+            dtheta_avg_start <= 1'b0;
             filter_step    <= 2'd1;
             sample_done    <= 1'b0;
         end else begin
+            dtheta_avg_start <= 1'b0;
             sample_done    <= 1'b0;
         end
     end
 
+endmodule
+
+// 精确有符号 5 点滑动平均器。用 36 个时钟完成逐位除以 5，避免将
+// 除法器放入 50 MHz 的单周期组合路径。定义放在本编译单元中，供摆杆与转臂共用。
+module moving_average_5 (
+    input  wire               clk,
+    input  wire               rst_n,
+    input  wire               start,
+    input  wire signed [31:0] sample_in,
+    output reg  signed [31:0] average_out,
+    output reg                done
+);
+    reg signed [31:0] samples [0:4];
+    reg signed [35:0] sum;
+    reg        [3:0]  write_idx;
+    reg               window_ready;
+    reg               divide_busy;
+    reg               quotient_negative;
+    reg [35:0]        dividend_shift;
+    reg [35:0]        quotient_shift;
+    reg [4:0]         remainder;
+    reg [5:0]         divide_count;
+    integer i;
+
+    wire signed [35:0] sample_ext = {{4{sample_in[31]}}, sample_in};
+    wire signed [35:0] oldest_ext = {{4{samples[write_idx][31]}}, samples[write_idx]};
+    wire signed [35:0] sum_after_replace = sum - oldest_ext + sample_ext;
+    wire signed [35:0] sum_for_divide = window_ready ? sum_after_replace :
+                                                       ((sample_ext <<< 2) + sample_ext);
+    wire [35:0] abs_sum_for_divide = sum_for_divide[35] ? -sum_for_divide : sum_for_divide;
+    wire [4:0] remainder_shifted = {remainder[3:0], dividend_shift[35]};
+    wire quotient_bit = (remainder_shifted >= 5'd5);
+    wire [4:0] remainder_next = quotient_bit ? (remainder_shifted - 5'd5) : remainder_shifted;
+    wire [35:0] quotient_next = {quotient_shift[34:0], quotient_bit};
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            sum               <= 36'sd0;
+            write_idx         <= 4'd0;
+            window_ready      <= 1'b0;
+            divide_busy       <= 1'b0;
+            quotient_negative <= 1'b0;
+            dividend_shift    <= 36'd0;
+            quotient_shift    <= 36'd0;
+            remainder         <= 5'd0;
+            divide_count      <= 6'd0;
+            average_out       <= 32'sd0;
+            done              <= 1'b0;
+            for (i = 0; i < 5; i = i + 1)
+                samples[i] <= 32'sd0;
+        end else begin
+            done <= 1'b0;
+            if (!divide_busy) begin
+                if (start) begin
+                    sum               <= sum_for_divide;
+                    quotient_negative <= sum_for_divide[35];
+                    dividend_shift    <= abs_sum_for_divide;
+                    quotient_shift    <= 36'd0;
+                    remainder         <= 5'd0;
+                    divide_count      <= 6'd0;
+                    divide_busy       <= 1'b1;
+                    if (!window_ready) begin
+                        window_ready <= 1'b1;
+                        for (i = 0; i < 5; i = i + 1)
+                            samples[i] <= sample_in;
+                    end else begin
+                        samples[write_idx] <= sample_in;
+                        if (write_idx == 4'd4)
+                            write_idx <= 4'd0;
+                        else
+                            write_idx <= write_idx + 1'b1;
+                    end
+                end
+            end else begin
+                dividend_shift <= {dividend_shift[34:0], 1'b0};
+                quotient_shift <= quotient_next;
+                remainder      <= remainder_next;
+                if (divide_count == 6'd35) begin
+                    average_out <= quotient_negative ? -$signed(quotient_next[31:0]) :
+                                                       $signed(quotient_next[31:0]);
+                    done        <= 1'b1;
+                    divide_busy <= 1'b0;
+                end else begin
+                    divide_count <= divide_count + 1'b1;
+                end
+            end
+        end
+    end
 endmodule
