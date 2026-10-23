@@ -4,8 +4,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from scipy.linalg import solve_discrete_are
 
 FIELDS = ["time_s", "theta", "dtheta", "alpha", "dalpha", "pwm_applied", "pwm_exc"]
+
+# LQR 权重设置位置：状态顺序 [theta, dtheta, alpha, dalpha]，输入为 PWM。
+# 提高某项 Q 对角线元素会更强地抑制对应状态；提高 R 会减少 PWM 动作。
+LQR_Q = np.diag([250.0, 8.0, 20.0, 2.0])
+LQR_R = np.array([[1.0]])
 
 def fit(csv_path: Path, out: Path, sample_period: float | None):
     df = pd.read_csv(csv_path)
@@ -42,10 +48,13 @@ def fit(csv_path: Path, out: Path, sample_period: float | None):
     pred = X0 @ A.T + U @ B.T + c
     rmse = np.sqrt(np.mean((X1 - pred) ** 2, axis=0))
     eig = np.linalg.eigvals(A)
+    P = solve_discrete_are(A, B, LQR_Q, LQR_R)
+    K = np.linalg.solve(B.T @ P @ B + LQR_R, B.T @ P @ A)
+    K_q10 = np.rint(K * 1024).astype(int)
     out.mkdir(parents=True, exist_ok=True)
-    result = {"dt_s": median_dt, "samples": int(len(X0)), "A": A.tolist(), "B": B.tolist(), "c": c.tolist(), "rmse": rmse.tolist(), "poles": [[float(v.real),float(v.imag)] for v in eig], "prbs_rms": float(np.sqrt(np.mean(Z**2)))}
+    result = {"dt_s": median_dt, "samples": int(len(X0)), "A": A.tolist(), "B": B.tolist(), "c": c.tolist(), "rmse": rmse.tolist(), "poles": [[float(v.real),float(v.imag)] for v in eig], "prbs_rms": float(np.sqrt(np.mean(Z**2))), "Q": LQR_Q.tolist(), "R": LQR_R.tolist(), "K": K.tolist(), "K_q10": K_q10.tolist()}
     (out / "identified_model.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-    pd.DataFrame(A).to_csv(out / "A.csv", index=False); pd.DataFrame(B).to_csv(out / "B.csv", index=False)
+    pd.DataFrame(A).to_csv(out / "A.csv", index=False); pd.DataFrame(B).to_csv(out / "B.csv", index=False); pd.DataFrame(K).to_csv(out / "K.csv", index=False)
     fig, axes = plt.subplots(4, 1, figsize=(10, 8), sharex=True)
     for i, name in enumerate(["theta","dtheta","alpha","dalpha"]):
         axes[i].plot(X1[:,i], label="measured"); axes[i].plot(pred[:,i], label="one-step prediction", alpha=.7); axes[i].set_ylabel(name); axes[i].legend()
