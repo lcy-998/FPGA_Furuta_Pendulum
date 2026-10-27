@@ -55,7 +55,7 @@ module angle_sensor_reader #(
     localparam signed [31:0] TWO_PI_Q16_X4096 = 32'sd1686630400; // 411775 * 4096
     localparam signed [31:0] NEG_SCALE_Q12 = (TWO_PI_Q16_X4096 + NEG_HALF_COUNTS) / (NEG_HALF_COUNTS * 2);
     localparam signed [31:0] POS_SCALE_Q12 = (TWO_PI_Q16_X4096 + POS_HALF_COUNTS) / (POS_HALF_COUNTS * 2);
-    localparam signed [31:0] FILTER_ALPHA_Q16 = 32'sd6938; // 滤波系数  * 65536 (消除除法器 E4)
+    localparam signed [31:0] FILTER_ALPHA_Q16 = 32'sd2938; // 滤波系数  * 65536 (消除除法器 E4)
 
     // 64 位中间乘法节点避免位宽截断与符号位混淆
     wire signed [31:0] scale_per_code_q12 = (diff_unwrapped < 0) ? NEG_SCALE_Q12 : POS_SCALE_Q12;

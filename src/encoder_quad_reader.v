@@ -196,7 +196,7 @@ module encoder_quad_reader #(
     // alpha_q16 = (pulse_cnt_18 * 105414) >>> 10, 误差仅 0.00033%
     localparam signed [17:0] K_ANGLE_18        = 18'sd105414;
     localparam signed [17:0] K_VEL_18          = 18'sd102944; // (pi/2)*65536
-    localparam signed [17:0] FILTER_ALPHA_18   = 18'sd22938;  // 0.35*65536
+    localparam signed [17:0] FILTER_ALPHA_18   = 18'sd2938;  // 0.35*65536
 
     reg signed [31:0] pulse_count_prev;
     reg signed [31:0] delta_pulse;
