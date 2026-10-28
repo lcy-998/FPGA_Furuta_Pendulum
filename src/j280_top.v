@@ -18,7 +18,11 @@
 module j280_hw_top #(
     parameter integer CLK_FREQ_HZ           = 50_000_000,          // 系统时钟频率
     parameter integer CALIB_DEBOUNCE_CYCLES = 1_000_000,           // KEY1 按键消抖阈值 (20ms)
-    parameter signed [31:0] ARM_SOFT_LIMIT_Q16 = 32'sd823548       // 转臂软限位阈值 (默认 ±2 圈)
+    parameter signed [31:0] ARM_SOFT_LIMIT_Q16 = 32'sd823548,      // 转臂软限位阈值 (默认 ±2 圈)
+    parameter integer PENDULUM_ALPHA_Q16 = 32768,
+    parameter integer PENDULUM_BETA_Q16  = 8192,
+    parameter integer ARM_ALPHA_Q16      = 32768,
+    parameter integer ARM_BETA_Q16       = 8192
 )(
     // 系统时钟与复位
     input  wire                   clk_50m,        // 板载 50MHz 有源晶振
@@ -143,6 +147,8 @@ module j280_hw_top #(
     // -------------------------------------------------------------------------
     // 4. GD32 原码帧解析 + 摆角解算。仅有效帧触发一次控制采样。
     // -------------------------------------------------------------------------
+    wire signed [31:0] theta_measurement_q16;
+    wire signed [31:0] dtheta_raw_q16;
     wire signed [31:0] theta_err_q16;
     wire signed [31:0] dtheta_q16;
 
@@ -163,17 +169,34 @@ module j280_hw_top #(
         .raw_valid     (adc_valid),
         .raw_data      (adc_code),
         .raw_adc_data  (),
-        .theta_err_q16 (theta_err_q16),
-        .dtheta_q16    (dtheta_q16),
+        .theta_err_q16 (theta_measurement_q16),
+        .dtheta_q16    (dtheta_raw_q16),
         .sample_done   (sample_done)
+    );
+
+    alpha_beta_filter #(
+        .WRAP_ANGLE(1), .ALPHA_Q16(PENDULUM_ALPHA_Q16), .BETA_Q16(PENDULUM_BETA_Q16)
+    ) u_pendulum_alpha_beta (
+        .clk(clk_50m), .rst_n(rst_n), .sample_en(sample_done),
+        .measurement_q16(theta_measurement_q16),
+        .angle_q16(theta_err_q16), .velocity_q16(dtheta_q16)
     );
 
     // -------------------------------------------------------------------------
     // 5. 例化: 电机编码器 4 倍频与数字滤波测速测角模块 (D4/D5/E4)
     // -------------------------------------------------------------------------
     wire signed [31:0] pulse_count;
+    wire signed [31:0] alpha_measurement_q16;
+    wire signed [31:0] dalpha_raw_q16;
     wire signed [31:0] alpha_rad_q16;
     wire signed [31:0] dalpha_rad_s_q16;
+    reg arm_filter_sample_en;
+    always @(posedge clk_50m or negedge rst_n) begin
+        if (!rst_n)
+            arm_filter_sample_en <= 1'b0;
+        else
+            arm_filter_sample_en <= sample_done;
+    end
 
     encoder_quad_reader #(
         .CLK_FREQ_HZ   (50_000_000),
@@ -190,10 +213,18 @@ module j280_hw_top #(
         .clear_pos      (clear_pos_pulse),
         .calc_en        (sample_done),       // 修复 F9: 统一由 sample_done 触发，严格与角度采样对齐
         .pulse_count    (pulse_count),
-        .alpha_rad_q16  (alpha_rad_q16),
-        .dalpha_rad_s_q16(dalpha_rad_s_q16),
+        .alpha_rad_q16  (alpha_measurement_q16),
+        .dalpha_rad_s_q16(dalpha_raw_q16),
         .speed_pps      (),
         .dir_flag       ()
+    );
+
+    alpha_beta_filter #(
+        .WRAP_ANGLE(0), .ALPHA_Q16(ARM_ALPHA_Q16), .BETA_Q16(ARM_BETA_Q16)
+    ) u_arm_alpha_beta (
+        .clk(clk_50m), .rst_n(rst_n), .sample_en(arm_filter_sample_en),
+        .measurement_q16(alpha_measurement_q16),
+        .angle_q16(alpha_rad_q16), .velocity_q16(dalpha_rad_s_q16)
     );
 
     // -------------------------------------------------------------------------

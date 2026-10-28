@@ -8,6 +8,7 @@ SYNC = 0xA5
 TYPE_TELEMETRY = 0x01
 TYPE_SET_GAINS = 0x10
 TYPE_ACK = 0x81
+TYPE_SET_FILTER = 0x11
 FIELDS = ("theta", "dtheta", "alpha", "dalpha", "theta_ref", "dtheta_ref", "alpha_ref", "dalpha_ref")
 GAIN_DEFAULTS = (-40059 / 1024, -696 / 1024, -9062 / 1024, -3994 / 1024, 0.0)
 
@@ -34,6 +35,15 @@ def gain_command(sequence: int, gains: list[float]) -> bytes:
     if any(value < -(1 << 17) or value >= (1 << 17) for value in raw):
         raise ValueError("增益必须在有符号 18 位 Q10 范围内（约 -128 到 127.999）")
     return frame(TYPE_SET_GAINS, sequence, struct.pack("<5i", *raw))
+
+
+def filter_command(sequence: int, coefficients: list[float]) -> bytes:
+    if len(coefficients) != 4:
+        raise ValueError("必须提供摆杆 α/β 和转臂 α/β 四个滤波系数")
+    raw = [round(value * 65536) for value in coefficients]
+    if any(value < 0 or value > 65536 for value in raw):
+        raise ValueError("滤波系数必须在 0 到 1 之间")
+    return frame(TYPE_SET_FILTER, sequence, struct.pack("<4i", *raw))
 
 
 @dataclass

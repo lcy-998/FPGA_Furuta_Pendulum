@@ -12,7 +12,7 @@ import serial
 from serial.tools import list_ports
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from protocol import FIELDS, GAIN_DEFAULTS, Parser, TYPE_ACK, TYPE_TELEMETRY, gain_command, telemetry_values
+from protocol import FIELDS, GAIN_DEFAULTS, Parser, TYPE_ACK, TYPE_TELEMETRY, filter_command, gain_command, telemetry_values
 
 
 class SerialWorker(QtCore.QThread):
@@ -170,6 +170,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.send_gains.clicked.connect(self.send_gain_values)
         self.send_gains.setEnabled(False)
 
+        filter_box = QtWidgets.QGroupBox("在线 α-β 滤波系数（0 到 1）")
+        filter_layout = QtWidgets.QGridLayout(filter_box)
+        self.filter_inputs = []
+        for idx, (name, value) in enumerate((("摆杆 α", .5), ("摆杆 β", .125), ("转臂 α", .5), ("转臂 β", .125))):
+            field = QtWidgets.QDoubleSpinBox(); field.setDecimals(5); field.setRange(0.0, 1.0); field.setSingleStep(.01); field.setValue(value)
+            filter_layout.addWidget(QtWidgets.QLabel(name), idx // 2, (idx % 2) * 2)
+            filter_layout.addWidget(field, idx // 2, (idx % 2) * 2 + 1)
+            self.filter_inputs.append(field)
+        self.send_filter = QtWidgets.QPushButton("发送滤波系数")
+        filter_layout.addWidget(self.send_filter, 2, 0, 1, 2)
+        right.addWidget(filter_box)
+        self.send_filter.clicked.connect(self.send_filter_values)
+        self.send_filter.setEnabled(False)
+
     def refresh_ports(self) -> None:
         current = self.port_box.currentData()
         self.port_box.clear()
@@ -185,6 +199,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.worker.stop(); self.worker = None
             self.connect_button.setText("连接")
             self.send_gains.setEnabled(False)
+            self.send_filter.setEnabled(False)
             self.pending_gain_seq = None
             return
         port = self.port_box.currentData()
@@ -196,6 +211,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.start()
         self.connect_button.setText("断开")
         self.send_gains.setEnabled(True)
+        self.send_filter.setEnabled(True)
 
     @QtCore.Slot(int, int, bytes)
     def on_packet(self, kind: int, sequence: int, payload: bytes) -> None:
@@ -221,10 +237,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.gain_result.setText(f"序号 {sequence}：已应用")
                 self.gain_result.setStyleSheet("color: #51c8c1")
             else:
-                self.gain_result.setText(f"序号 {sequence}：FPGA 拒绝，范围无效")
+                self.gain_result.setText(f"序号 {sequence}：FPGA 拒绝，参数范围无效")
                 self.gain_result.setStyleSheet("color: #ff6b6b")
             self.pending_gain_seq = None
             self.send_gains.setEnabled(True)
+            self.send_filter.setEnabled(True)
 
     @QtCore.Slot()
     def refresh_visuals(self) -> None:
@@ -257,7 +274,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pending_gain_seq = self.sequence
         self.worker.send(packet)
         self.send_gains.setEnabled(False)
+        self.send_filter.setEnabled(False)
         self.gain_result.setText(f"已发送序号 {self.sequence}，等待 FPGA 应答…")
+        self.sequence = (self.sequence + 1) & 0xFF
+
+    def send_filter_values(self) -> None:
+        if not self.worker or not self.worker.isRunning():
+            self.gain_result.setText("请先连接串口"); return
+        try:
+            packet = filter_command(self.sequence, [field.value() for field in self.filter_inputs])
+        except ValueError as exc:
+            self.gain_result.setText(str(exc)); return
+        self.pending_gain_seq = self.sequence
+        self.worker.send(packet)
+        self.send_gains.setEnabled(False)
+        self.send_filter.setEnabled(False)
+        self.gain_result.setText(f"滤波系数已发送序号 {self.sequence}，等待 FPGA 应答…")
         self.sequence = (self.sequence + 1) & 0xFF
 
     def toggle_pause(self) -> None:
