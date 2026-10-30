@@ -12,7 +12,7 @@ import serial
 from serial.tools import list_ports
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from protocol import FIELDS, GAIN_DEFAULTS, Parser, TYPE_ACK, TYPE_TELEMETRY, gain_command, telemetry_values
+from protocol import FIELDS, GAIN_DEFAULTS, Parser, TYPE_ACK, TYPE_TELEMETRY, deadband_command, gain_command, telemetry_values
 
 
 class SerialWorker(QtCore.QThread):
@@ -90,6 +90,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker: SerialWorker | None = None
         self.sequence = 0
         self.pending_gain_seq: int | None = None
+        self.pending_deadband_seq: int | None = None
         self.paused = False
         self.rows: deque[dict[str, float | str]] = deque(maxlen=60000)
         self.start_time = time.monotonic()
@@ -163,12 +164,16 @@ class MainWindow(QtWidgets.QMainWindow):
             gain_layout.addWidget(QtWidgets.QLabel(f"K{idx + 1}"), idx // 2, (idx % 2) * 2)
             gain_layout.addWidget(field, idx // 2, (idx % 2) * 2 + 1)
             self.gain_inputs.append(field)
+        self.deadband_input = QtWidgets.QSpinBox(); self.deadband_input.setRange(0, 1000); self.deadband_input.setValue(20)
+        self.send_deadband = QtWidgets.QPushButton("Apply deadband")
         self.send_gains = QtWidgets.QPushButton("发送并应用")
         self.gain_result = QtWidgets.QLabel("等待参数发送")
         gain_layout.addWidget(self.send_gains, 3, 0, 1, 2); gain_layout.addWidget(self.gain_result, 3, 2, 1, 2)
+        gain_layout.addWidget(QtWidgets.QLabel("Deadband"), 4, 0); gain_layout.addWidget(self.deadband_input, 4, 1); gain_layout.addWidget(self.send_deadband, 4, 2, 1, 2)
         right.addWidget(gain_box)
         self.send_gains.clicked.connect(self.send_gain_values)
-        self.send_gains.setEnabled(False)
+        self.send_deadband.clicked.connect(self.send_deadband_value)
+        self.send_gains.setEnabled(False); self.send_deadband.setEnabled(False)
 
     def refresh_ports(self) -> None:
         current = self.port_box.currentData()
@@ -184,8 +189,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.worker and self.worker.isRunning():
             self.worker.stop(); self.worker = None
             self.connect_button.setText("连接")
-            self.send_gains.setEnabled(False)
-            self.pending_gain_seq = None
+            self.send_gains.setEnabled(False); self.send_deadband.setEnabled(False)
+            self.pending_gain_seq = None; self.pending_deadband_seq = None
             return
         port = self.port_box.currentData()
         if not port:
@@ -195,7 +200,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.link_status.connect(self.status.setText)
         self.worker.start()
         self.connect_button.setText("断开")
-        self.send_gains.setEnabled(True)
+        self.send_gains.setEnabled(True); self.send_deadband.setEnabled(True)
 
     @QtCore.Slot(int, int, bytes)
     def on_packet(self, kind: int, sequence: int, payload: bytes) -> None:
@@ -215,7 +220,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.latest_values = values
             self.latest_time = now
         elif kind == TYPE_ACK and len(payload) == 1:
-            if self.pending_gain_seq is None or sequence != self.pending_gain_seq:
+            if (self.pending_gain_seq is None or sequence != self.pending_gain_seq) and (self.pending_deadband_seq is None or sequence != self.pending_deadband_seq):
                 return
             if payload[0] == 0:
                 self.gain_result.setText(f"序号 {sequence}：已应用")
@@ -223,8 +228,8 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 self.gain_result.setText(f"序号 {sequence}：FPGA 拒绝，范围无效")
                 self.gain_result.setStyleSheet("color: #ff6b6b")
-            self.pending_gain_seq = None
-            self.send_gains.setEnabled(True)
+            self.pending_gain_seq = None; self.pending_deadband_seq = None
+            self.send_gains.setEnabled(True); self.send_deadband.setEnabled(True)
 
     @QtCore.Slot()
     def refresh_visuals(self) -> None:
@@ -256,8 +261,14 @@ class MainWindow(QtWidgets.QMainWindow):
             self.gain_result.setText(str(exc)); return
         self.pending_gain_seq = self.sequence
         self.worker.send(packet)
-        self.send_gains.setEnabled(False)
+        self.send_gains.setEnabled(False); self.send_deadband.setEnabled(False)
         self.gain_result.setText(f"已发送序号 {self.sequence}，等待 FPGA 应答…")
+        self.sequence = (self.sequence + 1) & 0xFF
+
+    def send_deadband_value(self) -> None:
+        if not self.worker or not self.worker.isRunning(): return
+        self.pending_deadband_seq = self.sequence
+        self.worker.send(deadband_command(self.sequence, self.deadband_input.value()))
         self.sequence = (self.sequence + 1) & 0xFF
 
     def toggle_pause(self) -> None:
@@ -270,7 +281,7 @@ class MainWindow(QtWidgets.QMainWindow):
         filename, _ = QtWidgets.QFileDialog.getSaveFileName(self, "保存遥测数据", "furuta_telemetry.csv", "CSV 文件 (*.csv)")
         if not filename:
             return
-        columns = ["wall_time", "time", *FIELDS]
+        columns = ["wall_time", "time", *FIELDS, "pwm_duty"]
         with open(filename, "w", newline="", encoding="utf-8-sig") as stream:
             writer = csv.DictWriter(stream, fieldnames=columns)
             writer.writeheader(); writer.writerows(self.rows)

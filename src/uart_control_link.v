@@ -11,12 +11,14 @@ module uart_control_link #(
     input wire signed [31:0] alpha_q16, dalpha_q16,
     input wire signed [31:0] theta_ref_q16, dtheta_ref_q16,
     input wire signed [31:0] alpha_ref_q16, dalpha_ref_q16,
+    input wire signed [15:0] pwm_duty,
+    output wire [15:0] dead_band_val,
     output wire signed [17:0] gain_k1, gain_k2, gain_k3, gain_k4, gain_k5,
     output reg [7:0] last_command_seq,
     output reg [7:0] last_command_status
 );
     localparam integer BIT_CLKS = CLK_HZ / BAUD;
-    localparam [7:0] TYPE_TELEMETRY = 8'h01, TYPE_SET_GAINS = 8'h10, TYPE_ACK = 8'h81;
+    localparam [7:0] TYPE_TELEMETRY = 8'h01, TYPE_SET_GAINS = 8'h10, TYPE_SET_DEADBAND = 8'h11, TYPE_ACK = 8'h81;
 
     function [15:0] crc_byte;
         input [15:0] crc_in; input [7:0] data;
@@ -69,16 +71,19 @@ module uart_control_link #(
     reg [7:0] p_data [0:19];
     reg [15:0] p_crc, p_crc_rx;
     reg [31:0] pending_word [0:4];
+    reg [15:0] active_dead_band, pending_dead_band;
     reg pending_valid;
     reg pending_ok;
+    reg [7:0] pending_type;
     reg [7:0] pending_seq;
     integer i;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             p_state<=P_SYNC; p_type<=0; p_seq<=0; p_len<=0; p_index<=0;
-            p_crc<=16'hffff; p_crc_rx<=0; pending_valid<=0; pending_ok<=0; pending_seq<=0;
+            p_crc<=16'hffff; p_crc_rx<=0; pending_valid<=0; pending_ok<=0; pending_seq<=0; pending_type<=0;
             for (i=0;i<20;i=i+1) p_data[i]<=0;
             for (i=0;i<5;i=i+1) pending_word[i]<=0;
+            pending_dead_band<=16'd20;
         end else begin
             if (sample_done && pending_valid) pending_valid<=1'b0;
             if (rx_valid) begin
@@ -88,11 +93,11 @@ module uart_control_link #(
                     P_SEQ: begin p_seq<=rx_byte; p_crc<=crc_byte(p_crc,rx_byte); p_state<=P_LEN; end
                     P_LEN: begin
                         p_len<=rx_byte; p_crc<=crc_byte(p_crc,rx_byte); p_index<=0;
-                        if (p_type==TYPE_SET_GAINS && rx_byte==20) p_state<=P_PAYLOAD;
+                        if ((p_type==TYPE_SET_GAINS && rx_byte==20) || (p_type==TYPE_SET_DEADBAND && rx_byte==2)) p_state<=P_PAYLOAD;
                         else begin
                             p_state<=P_SYNC;
-                            if (p_type==TYPE_SET_GAINS) begin
-                                pending_seq<=p_seq; pending_valid<=1'b1; pending_ok<=1'b0;
+                            if (p_type==TYPE_SET_GAINS || p_type==TYPE_SET_DEADBAND) begin
+                                pending_seq<=p_seq; pending_type<=p_type; pending_valid<=1'b1; pending_ok<=1'b0;
                             end
                         end
                     end
@@ -104,19 +109,23 @@ module uart_control_link #(
                     P_CRC1: begin
                         p_state<=P_SYNC;
                         if ({rx_byte,p_crc_rx[7:0]}==p_crc) begin
+                            if (p_type==TYPE_SET_DEADBAND) begin
+                                pending_dead_band <= {p_data[1],p_data[0]}; pending_type <= p_type;
+                                pending_valid <= ({p_data[1],p_data[0]} <= 16'd1000); pending_ok <= ({p_data[1],p_data[0]} <= 16'd1000); pending_seq <= p_seq;
+                            end
                             for (i=0;i<5;i=i+1)
                                 pending_word[i] <= {p_data[i*4+3],p_data[i*4+2],p_data[i*4+1],p_data[i*4]};
                             pending_seq<=p_seq;
                             // Range check signed 18-bit Q10 sign-extension; invalid packet gets NAK.
-                            if ((p_data[2][7:2]=={6{p_data[2][1]}}) && (p_data[3]=={8{p_data[2][1]}}) &&
+                            if ((p_type==TYPE_SET_GAINS) && (p_data[2][7:2]=={6{p_data[2][1]}}) && (p_data[3]=={8{p_data[2][1]}}) &&
                                 (p_data[6][7:2]=={6{p_data[6][1]}}) && (p_data[7]=={8{p_data[6][1]}}) &&
                                 (p_data[10][7:2]=={6{p_data[10][1]}}) && (p_data[11]=={8{p_data[10][1]}}) &&
                                 (p_data[14][7:2]=={6{p_data[14][1]}}) && (p_data[15]=={8{p_data[14][1]}}) &&
                                 (p_data[18][7:2]=={6{p_data[18][1]}}) && (p_data[19]=={8{p_data[18][1]}})) begin
                                 pending_valid<=1'b1; pending_ok<=1'b1;
-                            end else begin pending_valid<=1'b1; pending_ok<=1'b0; end
-                        end else if (p_type==TYPE_SET_GAINS && p_len==20) begin
-                            pending_seq<=p_seq; pending_valid<=1'b1; pending_ok<=1'b0;
+                            end else if (p_type==TYPE_SET_GAINS) begin pending_valid<=1'b1; pending_ok<=1'b0; end
+                        end else if ((p_type==TYPE_SET_GAINS && p_len==20) || (p_type==TYPE_SET_DEADBAND && p_len==2)) begin
+                            pending_seq<=p_seq; pending_type<=p_type; pending_valid<=1'b1; pending_ok<=1'b0;
                         end
                     end
                     default: p_state<=P_SYNC;
@@ -129,23 +138,27 @@ module uart_control_link #(
     reg ack_pending;
     reg [7:0] ack_seq, ack_status;
     reg signed [17:0] active_k1, active_k2, active_k3, active_k4, active_k5;
-    assign gain_k1 = (sample_done && pending_valid && pending_ok) ? pending_word[0][17:0] : active_k1;
-    assign gain_k2 = (sample_done && pending_valid && pending_ok) ? pending_word[1][17:0] : active_k2;
-    assign gain_k3 = (sample_done && pending_valid && pending_ok) ? pending_word[2][17:0] : active_k3;
-    assign gain_k4 = (sample_done && pending_valid && pending_ok) ? pending_word[3][17:0] : active_k4;
-    assign gain_k5 = (sample_done && pending_valid && pending_ok) ? pending_word[4][17:0] : active_k5;
+    assign gain_k1 = (sample_done && pending_valid && pending_ok && pending_type==TYPE_SET_GAINS) ? pending_word[0][17:0] : active_k1;
+    assign gain_k2 = (sample_done && pending_valid && pending_ok && pending_type==TYPE_SET_GAINS) ? pending_word[1][17:0] : active_k2;
+    assign gain_k3 = (sample_done && pending_valid && pending_ok && pending_type==TYPE_SET_GAINS) ? pending_word[2][17:0] : active_k3;
+    assign gain_k4 = (sample_done && pending_valid && pending_ok && pending_type==TYPE_SET_GAINS) ? pending_word[3][17:0] : active_k4;
+    assign gain_k5 = (sample_done && pending_valid && pending_ok && pending_type==TYPE_SET_GAINS) ? pending_word[4][17:0] : active_k5;
+    assign dead_band_val = active_dead_band;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             // 默认反馈矩阵 [-39.12, -0.680, -8.85, -3.90, -0.00]，Q10。
             active_k1<=-18'sd40059; active_k2<=-18'sd696; active_k3<=-18'sd9062;
             active_k4<=-18'sd3994; active_k5<=18'sd0;
+            active_dead_band<=16'd20;
             ack_pending<=0; ack_seq<=0; ack_status<=0;
             last_command_seq<=0; last_command_status<=0;
         end else if (sample_done && pending_valid) begin
-            if (pending_ok) begin
+            if (pending_ok && (pending_type==TYPE_SET_GAINS)) begin
                 active_k1<=pending_word[0][17:0]; active_k2<=pending_word[1][17:0];
                 active_k3<=pending_word[2][17:0]; active_k4<=pending_word[3][17:0]; active_k5<=pending_word[4][17:0];
-                ack_status<=0; last_command_status<=0;
+                ack_status<=0;
+            end else if (pending_ok && (pending_type==TYPE_SET_DEADBAND)) begin
+                active_dead_band <= pending_dead_band; ack_status<=0; last_command_status<=0;
             end else begin
                 ack_status<=1; last_command_status<=1;
             end
@@ -156,7 +169,7 @@ module uart_control_link #(
     end
 
     // TX packet builder/serializer. Telemetry payload is eight signed Q16.16 words.
-    reg [7:0] payload [0:31];
+    reg [7:0] payload [0:33];
     reg [7:0] tx_type, tx_seq, tx_len, tx_idx;
     reg tx_packet_pending;
     wire ack_take = ack_pending && !tx_packet_pending && (tx_idx==0);
@@ -185,14 +198,14 @@ module uart_control_link #(
         if (!rst_n) begin
             tx_type<=0; tx_seq<=0; tx_len<=0; tx_idx<=0; tx_packet_pending<=0;
             telemetry_div<=0; seq_counter<=0; tx_crc<=16'hffff;
-            for (j=0;j<32;j=j+1) payload[j]<=0;
+            for (j=0;j<34;j=j+1) payload[j]<=0;
         end else begin
             if (sample_done) begin
                 if (telemetry_div==9) begin
                     telemetry_div<=0;
                     if (!tx_packet_pending && !ack_pending && tx_idx==0) begin
                         tx_type<=TYPE_TELEMETRY; tx_seq<=seq_counter; seq_counter<=seq_counter+1'b1;
-                        tx_len<=32; tx_idx<=0; tx_packet_pending<=1;
+                        tx_len<=34; tx_idx<=0; tx_packet_pending<=1;
                         payload[0]<=theta_q16[7:0]; payload[1]<=theta_q16[15:8]; payload[2]<=theta_q16[23:16]; payload[3]<=theta_q16[31:24];
                         payload[4]<=dtheta_q16[7:0]; payload[5]<=dtheta_q16[15:8]; payload[6]<=dtheta_q16[23:16]; payload[7]<=dtheta_q16[31:24];
                         payload[8]<=alpha_q16[7:0]; payload[9]<=alpha_q16[15:8]; payload[10]<=alpha_q16[23:16]; payload[11]<=alpha_q16[31:24];
@@ -201,6 +214,7 @@ module uart_control_link #(
                         payload[20]<=dtheta_ref_q16[7:0]; payload[21]<=dtheta_ref_q16[15:8]; payload[22]<=dtheta_ref_q16[23:16]; payload[23]<=dtheta_ref_q16[31:24];
                         payload[24]<=alpha_ref_q16[7:0]; payload[25]<=alpha_ref_q16[15:8]; payload[26]<=alpha_ref_q16[23:16]; payload[27]<=alpha_ref_q16[31:24];
                         payload[28]<=dalpha_ref_q16[7:0]; payload[29]<=dalpha_ref_q16[15:8]; payload[30]<=dalpha_ref_q16[23:16]; payload[31]<=dalpha_ref_q16[31:24];
+                        payload[32]<=pwm_duty[7:0]; payload[33]<=pwm_duty[15:8];
                     end
                 end else telemetry_div<=telemetry_div+1'b1;
             end

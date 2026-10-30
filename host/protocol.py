@@ -7,8 +7,10 @@ from dataclasses import dataclass
 SYNC = 0xA5
 TYPE_TELEMETRY = 0x01
 TYPE_SET_GAINS = 0x10
+TYPE_SET_DEADBAND = 0x11
 TYPE_ACK = 0x81
 FIELDS = ("theta", "dtheta", "alpha", "dalpha", "theta_ref", "dtheta_ref", "alpha_ref", "dalpha_ref")
+TELEMETRY_FIELDS = FIELDS + ("pwm_duty",)
 GAIN_DEFAULTS = (-40059 / 1024, -696 / 1024, -9062 / 1024, -3994 / 1024, 0.0)
 
 
@@ -77,7 +79,16 @@ class Parser:
         return packets
 
 
+def deadband_command(sequence: int, value: int) -> bytes:
+    if not 0 <= value <= 1000:
+        raise ValueError("??????? 0 ? 1000 ??")
+    return frame(TYPE_SET_DEADBAND, sequence, struct.pack("<H", value))
+
+
 def telemetry_values(payload: bytes) -> dict[str, float]:
-    if len(payload) != 32:
+    if len(payload) not in (32, 34):
         raise ValueError(f"遥测长度错误：{len(payload)}")
-    return {name: raw / 65536.0 for name, raw in zip(FIELDS, struct.unpack("<8i", payload))}
+    values = {name: raw / 65536.0 for name, raw in zip(FIELDS, struct.unpack("<8i", payload[:32]))}
+    if len(payload) == 34:
+        values["pwm_duty"] = struct.unpack("<h", payload[32:34])[0]
+    return values

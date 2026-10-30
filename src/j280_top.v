@@ -226,12 +226,14 @@ module j280_hw_top #(
 
     wire signed [17:0] gain_k1, gain_k2, gain_k3, gain_k4, gain_k5;
     wire [7:0] pc_gain_seq, pc_gain_status;
+    wire [15:0] dead_band_val;
     uart_control_link #(.CLK_HZ(CLK_FREQ_HZ), .BAUD(115200)) u_pc_link (
         .clk(clk_50m), .rst_n(rst_n), .rx(uart_rx), .tx(uart_tx), .sample_done(sample_done),
         .theta_q16(theta_err_q16), .dtheta_q16(dtheta_q16),
         .alpha_q16(alpha_rad_q16), .dalpha_q16(dalpha_rad_s_q16),
         .theta_ref_q16(32'sd0), .dtheta_ref_q16(32'sd0),
         .alpha_ref_q16(alpha_ref_q16), .dalpha_ref_q16(dalpha_ref_q16),
+        .pwm_duty(final_pwm_duty), .dead_band_val(dead_band_val),
         .gain_k1(gain_k1), .gain_k2(gain_k2), .gain_k3(gain_k3), .gain_k4(gain_k4), .gain_k5(gain_k5),
         .last_command_seq(pc_gain_seq), .last_command_status(pc_gain_status)
     );
@@ -388,13 +390,14 @@ module j280_hw_top #(
         .CLK_FREQ_HZ   (50_000_000),
         .PWM_FREQ_HZ   (20_000),
         .DUTY_MAX_VAL  (1000),
-        .DEAD_BAND_VAL (50)              // 非零指令额外补偿 50 PWM，补偿后仍限制在 1000
+        .DEAD_BAND_VAL (20)              // 非零指令额外补偿 20 PWM，补偿后仍限制在 1000
     ) u_motor_driver (
         .clk        (clk_50m),
         .rst_n      (rst_n),
         .motor_en   (fsm_motor_active && !adc_stale),
         .brake_mode (sw_brake_mode && !adc_stale),
         .pwm_duty   (adc_stale ? 16'sd0 : final_pwm_duty),
+        .dead_band_val(dead_band_val),
         .pwm_out    (motor_pwm),
         .dir_out    (motor_dir),
         .in1_out    (motor_in1),
