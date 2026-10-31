@@ -6,6 +6,7 @@
     <Device name="GW2A-18C" pn="GW2A-LV18PG256C8/I7">gw2a18c-011</Device>
     <FileList>
         <File path="src/adc_bridge.v" type="file.verilog" enable="1"/>
+        <File path="src/alpha_beta_filter.v" type="file.verilog" enable="0"/>
         <File path="src/angle_sensor_reader.v" type="file.verilog" enable="1"/>
         <File path="src/ctrl_fsm.v" type="file.verilog" enable="1"/>
         <File path="src/encoder_quad_reader.v" type="file.verilog" enable="1"/>

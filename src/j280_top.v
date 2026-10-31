@@ -226,6 +226,7 @@ module j280_hw_top #(
 
     wire signed [17:0] gain_k1, gain_k2, gain_k3, gain_k4, gain_k5;
     wire [7:0] pc_gain_seq, pc_gain_status;
+    wire signed [15:0] final_pwm_duty;
     wire [15:0] dead_band_val;
     uart_control_link #(.CLK_HZ(CLK_FREQ_HZ), .BAUD(115200)) u_pc_link (
         .clk(clk_50m), .rst_n(rst_n), .rx(uart_rx), .tx(uart_tx), .sample_done(sample_done),
@@ -233,7 +234,7 @@ module j280_hw_top #(
         .alpha_q16(alpha_rad_q16), .dalpha_q16(dalpha_rad_s_q16),
         .theta_ref_q16(32'sd0), .dtheta_ref_q16(32'sd0),
         .alpha_ref_q16(alpha_ref_q16), .dalpha_ref_q16(dalpha_ref_q16),
-        .pwm_duty(final_pwm_duty), .dead_band_val(dead_band_val),
+        .pwm_duty(final_pwm_duty), .raw_adc(adc_code), .dead_band_val(dead_band_val),
         .gain_k1(gain_k1), .gain_k2(gain_k2), .gain_k3(gain_k3), .gain_k4(gain_k4), .gain_k5(gain_k5),
         .last_command_seq(pc_gain_seq), .last_command_status(pc_gain_status)
     );
@@ -247,8 +248,6 @@ module j280_hw_top #(
     wire               fsm_motor_active;
     wire               reset_integral_pulse;
     wire               is_in_balance_zone;
-    wire signed [15:0] final_pwm_duty;
-
     wire signed [15:0] swing_pwm_duty;
     wire               swing_calc_done;
     wire               swing_energy_deficit;

@@ -97,6 +97,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.history: dict[str, deque[tuple[float, float]]] = {
             key: deque(maxlen=2000) for key in FIELDS
         }
+        self.raw_adc_history: deque[tuple[float, float]] = deque(maxlen=2000)
         self.latest_values: dict[str, float] | None = None
         self.latest_time = 0.0
         self._build_ui()
@@ -151,7 +152,11 @@ class MainWindow(QtWidgets.QMainWindow):
         save_button.clicked.connect(self.save_csv)
 
         right = QtWidgets.QVBoxLayout(); body.addLayout(right, 2)
-        self.animation = PendulumView(); right.addWidget(self.animation)
+        self.raw_adc_plot = pg.PlotWidget(title="ADC Raw Reading")
+        self.raw_adc_plot.setBackground("#101820"); self.raw_adc_plot.showGrid(x=True, y=True, alpha=0.25)
+        self.raw_adc_plot.setLabel("bottom", "Time", units="s"); self.raw_adc_plot.setLabel("left", "ADC code")
+        self.raw_adc_curve = self.raw_adc_plot.plot(pen=pg.mkPen("#ffc857", width=2), name="Raw ADC")
+        right.addWidget(self.raw_adc_plot)
         self.live_values = QtWidgets.QLabel("等待遥测…")
         self.live_values.setWordWrap(True)
         self.live_values.setStyleSheet("font-size: 14px; padding: 8px; color: #e7edf3")
@@ -217,6 +222,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
             for key in FIELDS:
                 self.history[key].append((now, values[key]))
+            if "raw_adc" in values:
+                self.raw_adc_history.append((now, values["raw_adc"]))
             self.latest_values = values
             self.latest_time = now
         elif kind == TYPE_ACK and len(payload) == 1:
@@ -244,7 +251,8 @@ class MainWindow(QtWidgets.QMainWindow):
             curve.setData([p[0] for p in points], [p[1] for p in points])
         self.angle_plot.setXRange(max(0.0, self.latest_time - 20.0), max(20.0, self.latest_time), padding=0)
         self.speed_plot.setXRange(max(0.0, self.latest_time - 20.0), max(20.0, self.latest_time), padding=0)
-        self.animation.set_angles(values["alpha"], values["theta"])
+        self.raw_adc_curve.setData([p[0] for p in self.raw_adc_history], [p[1] for p in self.raw_adc_history])
+        self.raw_adc_plot.setXRange(max(0.0, self.latest_time - 20.0), max(20.0, self.latest_time), padding=0)
         self.live_values.setText(
             f"摆杆 θ {values['theta']:+.3f} / 目标 {values['theta_ref']:+.3f} rad\n"
             f"摆杆速度 {values['dtheta']:+.3f} / 目标 {values['dtheta_ref']:+.3f} rad/s\n"
@@ -281,7 +289,7 @@ class MainWindow(QtWidgets.QMainWindow):
         filename, _ = QtWidgets.QFileDialog.getSaveFileName(self, "保存遥测数据", "furuta_telemetry.csv", "CSV 文件 (*.csv)")
         if not filename:
             return
-        columns = ["wall_time", "time", *FIELDS, "pwm_duty"]
+        columns = ["wall_time", "time", *FIELDS, "pwm_duty", "raw_adc"]
         with open(filename, "w", newline="", encoding="utf-8-sig") as stream:
             writer = csv.DictWriter(stream, fieldnames=columns)
             writer.writeheader(); writer.writerows(self.rows)

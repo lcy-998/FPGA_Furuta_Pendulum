@@ -86,9 +86,11 @@ def deadband_command(sequence: int, value: int) -> bytes:
 
 
 def telemetry_values(payload: bytes) -> dict[str, float]:
-    if len(payload) not in (32, 34):
+    if len(payload) not in (32, 34, 36):
         raise ValueError(f"遥测长度错误：{len(payload)}")
     values = {name: raw / 65536.0 for name, raw in zip(FIELDS, struct.unpack("<8i", payload[:32]))}
-    if len(payload) == 34:
+    if len(payload) >= 34:
         values["pwm_duty"] = struct.unpack("<h", payload[32:34])[0]
+    if len(payload) == 36:
+        values["raw_adc"] = struct.unpack("<H", payload[34:36])[0]
     return values

@@ -6,6 +6,10 @@ parsetab.py
 # Local Gowin Designer user state
 *.gprj.user
 
+# Local telemetry and Gowin project files
+*.csv
+*.gprj
+
 # Python bytecode cache
 __pycache__/
 *.py[cod]
