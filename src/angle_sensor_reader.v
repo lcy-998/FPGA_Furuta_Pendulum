@@ -106,6 +106,14 @@ module angle_sensor_reader #(
                                            ((raw_dtheta_calc < -DTHETA_PHYS_LIMIT_Q16) ? -DTHETA_PHYS_LIMIT_Q16 :
                                             raw_dtheta_calc);
 
+    // Limit successive 1ms velocity samples before they enter the IIR state.
+    localparam signed [31:0] MAX_DTHETA_STEP_Q16 = 32'sd655360; // 10 rad/s per 1ms
+    wire signed [31:0] raw_dtheta_delta = raw_dtheta_clamped - raw_dtheta_q16;
+    wire signed [31:0] raw_dtheta_limited =
+        (raw_dtheta_delta > MAX_DTHETA_STEP_Q16) ? (raw_dtheta_q16 + MAX_DTHETA_STEP_Q16) :
+        (raw_dtheta_delta < -MAX_DTHETA_STEP_Q16) ? (raw_dtheta_q16 - MAX_DTHETA_STEP_Q16) :
+                                                    raw_dtheta_clamped;
+
     // 拍 3 组合逻辑: 先执行 IIR，随后将其输出送入 5 点滑动窗口。
     wire signed [47:0] filter_diff_mult   = $signed(raw_dtheta_q16 - dtheta_iir_q16) * $signed(FILTER_ALPHA_Q16);
     wire signed [47:0] filter_diff_shift  = filter_diff_mult >>> 16;
@@ -132,7 +140,7 @@ module angle_sensor_reader #(
             filter_step      <= 2'd0;
         end else if (filter_step == 2'd1) begin
             // 流水拍 2: 解卷绕、限幅滤波并换算为 rad/s (消除盲区虚假尖峰)
-            raw_dtheta_q16 <= raw_dtheta_clamped;
+            raw_dtheta_q16 <= raw_dtheta_limited;
             dtheta_avg_start <= 1'b0;
             filter_step    <= 2'd2;
             sample_done    <= 1'b0;
