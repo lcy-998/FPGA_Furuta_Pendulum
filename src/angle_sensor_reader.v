@@ -2,7 +2,7 @@
 // The UART frame receiver is separate; every valid frame starts one processing pass.
 module angle_sensor_reader #(
     parameter integer INVERT_DIR = 0,
-    parameter [11:0] TOP_RAW = 12'd1290,
+    parameter [11:0] TOP_RAW = 12'd1300,
     parameter [11:0] BOTTOM_RAW = 12'd400
 )(
     input  wire               clk,
@@ -18,9 +18,9 @@ module angle_sensor_reader #(
     // 1. 角度绝对零点扣减与 360° 全圆周越界解卷绕 (Unwrapping)
     // -------------------------------------------------------------------------
     // ADC 刻度范围: [0, 1990]，共 1991 个刻度
-    // 固定直立零点 TOP_RAW=1287、最低点 BOTTOM_RAW=400。
-    // 从最低点到直立点递增 887 码；另一半圈经 1990/0 边界，共 1104 码。
-    // 以最低点为 ±pi 分界，映射范围为 [-887, 1103] 码。
+    // 固定直立零点 TOP_RAW=1300、最低点 BOTTOM_RAW=400。
+    // 从最低点到直立点递增 900 码；另一半圈经 1990/0 边界，共 1091 码。
+    // 以最低点为 ±pi 分界，映射范围为 [-900, 1090] 码。
     // 这样摆杆在垂直向上 (theta = 0) 附近做微小左右摆动时，diff 严格围绕 0 线性连续变化！
     // -------------------------------------------------------------------------
     localparam signed [12:0] ADC_CODES_PER_REV = 13'sd1991;
@@ -45,7 +45,7 @@ module angle_sensor_reader #(
     // 2. 角度尺度变换 (刻度 -> Q12.16 弧度) 与差分角速度滤波
     // -------------------------------------------------------------------------
     // 两段码值各对应 pi rad，按实测两端点分别缩放：
-    // 负侧 887 码对应 pi；正侧 1104 码对应 pi。
+    // 负侧 900 码对应 pi；正侧 1091 码对应 pi。
     // 以下除法只用于参数常数的编译期计算，运行时均乘常数再 >>> 12。
     //
     // 角速度计算:
@@ -177,8 +177,93 @@ module angle_sensor_reader #(
 
 endmodule
 
+// 转臂专用的精确有符号 10 点滑动平均器。
+module moving_average_10 (
+    input  wire               clk,
+    input  wire               rst_n,
+    input  wire               start,
+    input  wire signed [31:0] sample_in,
+    output reg  signed [31:0] average_out,
+    output reg                done
+);
+    reg signed [31:0] samples [0:9];
+    reg signed [35:0] sum;
+    reg        [3:0]  write_idx;
+    reg               window_ready;
+    reg               divide_busy;
+    reg               quotient_negative;
+    reg [35:0]        dividend_shift;
+    reg [35:0]        quotient_shift;
+    reg [3:0]         remainder;
+    reg [5:0]         divide_count;
+    integer i;
+
+    wire signed [35:0] sample_ext = {{4{sample_in[31]}}, sample_in};
+    wire signed [35:0] oldest_ext = {{4{samples[write_idx][31]}}, samples[write_idx]};
+    wire signed [35:0] sum_after_replace = sum - oldest_ext + sample_ext;
+    wire signed [35:0] sum_for_divide = window_ready ? sum_after_replace : ((sample_ext <<< 3) + (sample_ext <<< 1));
+    wire [35:0] abs_sum_for_divide = sum_for_divide[35] ? -sum_for_divide : sum_for_divide;
+    wire [4:0] remainder_shifted = {remainder, dividend_shift[35]};
+    wire quotient_bit = (remainder_shifted >= 5'd10);
+    wire [3:0] remainder_next = quotient_bit ? (remainder_shifted - 5'd10) : remainder_shifted[3:0];
+    wire [35:0] quotient_next = {quotient_shift[34:0], quotient_bit};
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            sum               <= 36'sd0;
+            write_idx         <= 4'd0;
+            window_ready      <= 1'b0;
+            divide_busy       <= 1'b0;
+            quotient_negative <= 1'b0;
+            dividend_shift    <= 36'd0;
+            quotient_shift    <= 36'd0;
+            remainder         <= 4'd0;
+            divide_count      <= 6'd0;
+            average_out       <= 32'sd0;
+            done              <= 1'b0;
+            for (i = 0; i < 10; i = i + 1)
+                samples[i] <= 32'sd0;
+        end else begin
+            done <= 1'b0;
+            if (!divide_busy) begin
+                if (start) begin
+                    sum               <= sum_for_divide;
+                    quotient_negative <= sum_for_divide[35];
+                    dividend_shift    <= abs_sum_for_divide;
+                    quotient_shift    <= 36'd0;
+                    remainder         <= 4'd0;
+                    divide_count      <= 6'd0;
+                    divide_busy       <= 1'b1;
+                    if (!window_ready) begin
+                        window_ready <= 1'b1;
+                        for (i = 0; i < 10; i = i + 1)
+                            samples[i] <= sample_in;
+                    end else begin
+                        samples[write_idx] <= sample_in;
+                        if (write_idx == 4'd9)
+                            write_idx <= 4'd0;
+                        else
+                            write_idx <= write_idx + 1'b1;
+                    end
+                end
+            end else begin
+                dividend_shift <= {dividend_shift[34:0], 1'b0};
+                quotient_shift <= quotient_next;
+                remainder      <= remainder_next;
+                if (divide_count == 6'd35) begin
+                    average_out <= quotient_negative ? -$signed(quotient_next[31:0]) : $signed(quotient_next[31:0]);
+                    done        <= 1'b1;
+                    divide_busy <= 1'b0;
+                end else begin
+                    divide_count <= divide_count + 1'b1;
+                end
+            end
+        end
+    end
+endmodule
+
 // 精确有符号 5 点滑动平均器。用 36 个时钟完成逐位除以 5，避免将
-// 除法器放入 50 MHz 的单周期组合路径。定义放在本编译单元中，供摆杆与转臂共用。
+// 除法器放入 50 MHz 的单周期组合路径，供摆杆测速使用。
 module moving_average_5 (
     input  wire               clk,
     input  wire               rst_n,

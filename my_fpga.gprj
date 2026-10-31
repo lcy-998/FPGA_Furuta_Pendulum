@@ -11,7 +11,9 @@
         <File path="src/ctrl_fsm.v" type="file.verilog" enable="1"/>
         <File path="src/encoder_quad_reader.v" type="file.verilog" enable="1"/>
         <File path="src/furuta_lqr_ctrl.v" type="file.verilog" enable="1"/>
+        <File path="src/homogeneous_diff_q16.v" type="file.verilog" enable="0"/>
         <File path="src/j280_top.v" type="file.verilog" enable="1"/>
+        <File path="src/pendulum_bias_observer.v" type="file.verilog" enable="0"/>
         <File path="src/pwm_driver.v" type="file.verilog" enable="1"/>
         <File path="src/swing_up_ctrl.v" type="file.verilog" enable="1"/>
         <File path="src/traj_gen.v" type="file.verilog" enable="1"/>

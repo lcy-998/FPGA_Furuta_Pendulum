@@ -6,7 +6,7 @@
 //           1. 硬件级双重防亚稳态同步 + 多级数字低通消抖滤波 (滤除电机火花电磁干扰)
 //           2. 严格四倍频 (4x Quadrature Decoding) 硬件状态判向鉴相
 //           3. 32 位有符号绝对脉冲位置计数 (支持掉电/按键归零与 Z 相零位复位)
-//           4. 1ms 定时硬件差分测速 + IIR 低通后 5 点滑动窗口平均滤波
+//           4. 1ms 定时硬件差分测速 + IIR 低通后 10 点滑动窗口平均滤波
 //           5. 直接输出 Q12.16 定点数转臂角位移 alpha (rad) 与角速度 dalpha (rad/s)
 // =============================================================================
 
@@ -188,7 +188,7 @@ module encoder_quad_reader #(
     // dalpha = delta_pulses / 0.001 * (2 * pi / 4000) = delta_pulses * (pi / 2)
     // 定点数 Q16: (pi / 2) * 65536 = 1.5707963 * 65536 = 102944
     //
-    // 一阶 IIR 滤波后，继续对 IIR 输出做 5 点滑动窗口平均。
+    // 一阶 IIR 滤波后，继续对 IIR 输出做 10 点滑动窗口平均。
     // 0.35 * 65536 = 22938 (消除 32 位除法器 / 100)
     // 优化乘法位宽至 18x18 (F10): pulse_count 在软限位 ±2 圈下仅 ±8000 脉冲
     // 18 位有符号数范围 [-131072, +131071] 对应 ±32.7 圈，余量充足
@@ -235,7 +235,7 @@ module encoder_quad_reader #(
     wire signed [31:0] dalpha_iir_next  = dalpha_iir_q16 + iir_diff_shifted;
     reg  [1:0]         filter_step;
 
-    moving_average_5 u_dalpha_mavg (
+    moving_average_10 u_dalpha_mavg (
         .clk(clk), .rst_n(rst_n), .start(dalpha_avg_start),
         .sample_in(dalpha_iir_sample_r), .average_out(dalpha_avg_q16), .done(dalpha_avg_done)
     );
@@ -279,7 +279,7 @@ module encoder_quad_reader #(
             dalpha_avg_start <= 1'b0;
             filter_step      <= 2'd2;
         end else if (filter_step == 2'd2) begin
-            // 拍 3: 寄存 IIR 输出，并启动多周期 5 点滑动窗口平均。
+            // 拍 3: 寄存 IIR 输出，并启动多周期 10 点滑动窗口平均。
             dalpha_iir_q16 <= dalpha_iir_next;
             dalpha_iir_sample_r <= dalpha_iir_next;
             dalpha_avg_start <= 1'b1;
